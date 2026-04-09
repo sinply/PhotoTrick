@@ -1,0 +1,64 @@
+# Build directories
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.user
+
+# Compiled files
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Qt generated
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+*_autogen/
+*.qm
+
+# IDE files
+.vscode/
+.idea/
+*.pro.user
+*.autosave
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.log
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Qt deployment (keep minimal)
+build/generic/
+build/iconengines/
+build/imageformats/
+build/networkinformation/
+build/platforms/
+build/styles/
+build/tls/
+build/translations/
+*.dll
