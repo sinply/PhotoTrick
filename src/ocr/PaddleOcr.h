@@ -12,11 +12,9 @@ class PaddleOcr : public OcrInterface
 public:
     explicit PaddleOcr(QObject *parent = nullptr);
 
+    void setBaseUrl(const QString &url) override;
     void recognize(const QImage &image, const QString &prompt) override;
     bool isReady() const override;
-
-    void setServerUrl(const QString &url);
-    QString serverUrl() const;
 
 private:
     void sendRequest(const QByteArray &imageData, const QString &prompt);

@@ -62,3 +62,6 @@ build/styles/
 build/tls/
 build/translations/
 *.dll
+
+# Archived tools and test data
+tools_archive/

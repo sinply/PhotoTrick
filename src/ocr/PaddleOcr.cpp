@@ -1,7 +1,6 @@
 #include "PaddleOcr.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QHttpMultiPart>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QBuffer>
@@ -9,18 +8,13 @@
 PaddleOcr::PaddleOcr(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
-    , m_serverUrl("http://localhost:8080")
+    , m_serverUrl("http://localhost:5000")
 {
 }
 
-void PaddleOcr::setServerUrl(const QString &url)
+void PaddleOcr::setBaseUrl(const QString &url)
 {
     m_serverUrl = url;
-}
-
-QString PaddleOcr::serverUrl() const
-{
-    return m_serverUrl;
 }
 
 bool PaddleOcr::isReady() const
@@ -30,38 +24,37 @@ bool PaddleOcr::isReady() const
 
 void PaddleOcr::recognize(const QImage &image, const QString &prompt)
 {
+    Q_UNUSED(prompt)
+
     if (!isReady()) {
         emit recognitionError(tr("PaddleOCR服务器未配置"));
         return;
     }
 
-    // Convert image to byte array
+    // Convert image to base64
     QByteArray imageData;
     QBuffer buffer(&imageData);
     buffer.open(QIODevice::WriteOnly);
     image.save(&buffer, "PNG");
     buffer.close();
 
-    // Create multipart request
-    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QString base64Image = QString("data:image/png;base64,") + imageData.toBase64();
 
-    QHttpPart imagePart;
-    imagePart.setHeader(QNetworkRequest::ContentTypeHeader, "image/png");
-    imagePart.setHeader(QNetworkRequest::ContentDispositionHeader,
-                        QVariant("form-data; name=\"image\"; filename=\"image.png\""));
-    imagePart.setBody(imageData);
-    multiPart->append(imagePart);
+    // Create JSON request
+    QJsonObject json;
+    json["image"] = base64Image;
 
-    QHttpPart promptPart;
-    promptPart.setHeader(QNetworkRequest::ContentDispositionHeader,
-                         QVariant("form-data; name=\"prompt\""));
-    promptPart.setBody(prompt.toUtf8());
-    multiPart->append(promptPart);
+    QJsonObject options;
+    options["detect_table"] = false;
+    options["return_boxes"] = false;
+    json["options"] = options;
+
+    QJsonDocument doc(json);
 
     // Send request
     QNetworkRequest request(QUrl(m_serverUrl + "/ocr"));
-    QNetworkReply *reply = m_networkManager->post(request, multiPart);
-    multiPart->setParent(reply);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    QNetworkReply *reply = m_networkManager->post(request, doc.toJson());
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleResponse(reply);
