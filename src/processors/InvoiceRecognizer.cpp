@@ -285,53 +285,27 @@ double extractLabeledAmount(const QString &rawText, const QStringList &positiveL
     };
     const QStringList &negLabels = negativeLabels.isEmpty() ? defaultNegative : negativeLabels;
 
-    for (const QString &lineRaw : lines) {
-        const QString line = lineRaw.trimmed();
-        if (line.isEmpty()) {
-            continue;
-        }
+    // Number regex for extracting amounts
+    QRegularExpression numRe(QStringLiteral(R"(([￥¥$]\s*)?(\d+(?:,\d{3})*(?:\.\d+)?)(?!\.?\d))"));
+    if (!numRe.isValid()) {
+        debugLog(QString("  Regex error: %1").arg(numRe.errorString()));
+    }
 
-        // Check for positive labels
-        int baseScore = 0;
-        QStringList matchedLabels;
-        for (const QString &label : positiveLabels) {
-            if (line.contains(label, Qt::CaseInsensitive)) {
-                // Exact match at line start gets higher score
-                if (line.startsWith(label, Qt::CaseInsensitive)) {
-                    baseScore += 10;
-                    matchedLabels << QString("%1(start)").arg(label);
-                } else {
-                    baseScore += 5;
-                    matchedLabels << label;
-                }
-            }
-        }
-
-        if (baseScore == 0) {
-            continue;
-        }
-
-        // Check for negative labels (reduce score)
-        QStringList matchedNegLabels;
-        for (const QString &negLabel : negLabels) {
-            if (line.contains(negLabel, Qt::CaseInsensitive)) {
-                baseScore -= 8;
-                matchedNegLabels << negLabel;
-            }
-        }
-
-        // Extract all numbers from this line
-        // Match numbers: currency symbol + number with optional commas and decimals
-        // Must match the COMPLETE number including decimal part
-        // e.g., ¥4800.84, ￥1,234.56, 1234.56
-        // Pattern: Group 1 = optional currency symbol, Group 2 = the number
-        // Negative lookahead (?!\.?\d) prevents matching partial decimals
-        QRegularExpression numRe(QStringLiteral(R"(([￥¥$]\s*)?)(\d+(?:,\d{3})*(?:\.\d+)?)(?!\.?\d))"));
-        auto it = numRe.globalMatch(line);
-
+    // Helper lambda to extract numbers from a line
+    auto extractNumbersFromLine = [&](const QString &line, int baseScore, const QString &contextLabel) -> QList<AmountCandidate> {
+        QList<AmountCandidate> lineCandidates;
+        QRegularExpressionMatchIterator it = numRe.globalMatch(line);
+        int matchCount = 0;
         while (it.hasNext()) {
-            const QRegularExpressionMatch match = it.next();
-            QString numStr = match.captured(2); // Group 2 is the numeric part
+            QRegularExpressionMatch match = it.next();
+            matchCount++;
+            debugLog(QString("  Regex match #%1: captured(0)='%2', captured(1)='%3', captured(2)='%4'")
+                .arg(matchCount)
+                .arg(match.captured(0))
+                .arg(match.captured(1))
+                .arg(match.captured(2)));
+
+            QString numStr = match.captured(2);
             bool ok = false;
             const double value = numStr.remove(',').toDouble(&ok);
             if (!ok || value <= 0) {
@@ -344,7 +318,7 @@ double extractLabeledAmount(const QString &rawText, const QStringList &positiveL
             candidate.score = baseScore;
 
             // Check if number is near currency symbol or keywords
-            const int numPos = match.capturedStart(2); // Position of the number part (group 2)
+            const int numPos = match.capturedStart(2);
             const QString beforeNum = line.left(numPos);
             const QString afterNum = line.mid(numPos + numStr.length());
 
@@ -381,7 +355,83 @@ double extractLabeledAmount(const QString &rawText, const QStringList &positiveL
             debugLog(QString("  Candidate: value=%1, score=%2, line: %3")
                 .arg(value).arg(candidate.score).arg(line));
 
-            candidates.append(candidate);
+            lineCandidates.append(candidate);
+        }
+        return lineCandidates;
+    };
+
+    for (int lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        const QString line = lines[lineIdx].trimmed();
+        if (line.isEmpty()) {
+            continue;
+        }
+
+        // Check for positive labels
+        int baseScore = 0;
+        QStringList matchedLabels;
+        for (const QString &label : positiveLabels) {
+            if (line.contains(label, Qt::CaseInsensitive)) {
+                // Exact match at line start gets higher score
+                if (line.startsWith(label, Qt::CaseInsensitive)) {
+                    baseScore += 10;
+                    matchedLabels << QString("%1(start)").arg(label);
+                } else {
+                    baseScore += 5;
+                    matchedLabels << label;
+                }
+            }
+        }
+
+        if (baseScore == 0) {
+            continue;
+        }
+
+        debugLog(QString("  Found label match on line: '%1', score=%2, labels=%3")
+            .arg(line).arg(baseScore).arg(matchedLabels.join(",")));
+
+        // Check for negative labels (reduce score)
+        QStringList matchedNegLabels;
+        for (const QString &negLabel : negLabels) {
+            if (line.contains(negLabel, Qt::CaseInsensitive)) {
+                baseScore -= 8;
+                matchedNegLabels << negLabel;
+            }
+        }
+
+        // Extract numbers from current line
+        QList<AmountCandidate> lineCandidates = extractNumbersFromLine(line, baseScore, line);
+        candidates.append(lineCandidates);
+
+        // If no numbers found on current line, check adjacent lines (OCR table structure)
+        if (lineCandidates.isEmpty()) {
+            debugLog(QString("  No numbers on label line, checking adjacent lines..."));
+
+            // Check previous 2 lines
+            for (int offset = 1; offset <= 2; ++offset) {
+                if (lineIdx - offset >= 0) {
+                    const QString prevLine = lines[lineIdx - offset].trimmed();
+                    if (!prevLine.isEmpty()) {
+                        // Reduce score for adjacent lines
+                        int adjScore = baseScore - offset * 2;
+                        debugLog(QString("  Checking previous line %1: '%2'").arg(-offset).arg(prevLine));
+                        QList<AmountCandidate> adjCandidates = extractNumbersFromLine(prevLine, adjScore, line);
+                        candidates.append(adjCandidates);
+                    }
+                }
+            }
+
+            // Check next 2 lines
+            for (int offset = 1; offset <= 2; ++offset) {
+                if (lineIdx + offset < lines.size()) {
+                    const QString nextLine = lines[lineIdx + offset].trimmed();
+                    if (!nextLine.isEmpty()) {
+                        int adjScore = baseScore - offset * 2;
+                        debugLog(QString("  Checking next line %1: '%2'").arg(offset).arg(nextLine));
+                        QList<AmountCandidate> adjCandidates = extractNumbersFromLine(nextLine, adjScore, line);
+                        candidates.append(adjCandidates);
+                    }
+                }
+            }
         }
     }
 
@@ -427,7 +477,8 @@ double extractTaxRateFromText(const QString &rawText)
     debugLog("extractTaxRateFromText called");
 
     const QStringList lines = rawText.split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
-    QRegularExpression pctRe(QStringLiteral(R"((\d{1,2}(?:\.\d+)?)\s*[％%])"));
+    QRegularExpression pctRe(QStringLiteral(R"((\d{1,2}(?:\.\d+)?)\s*[％%])"));  // 9%, 9％
+    QRegularExpression pctReReversed(QStringLiteral(R"([％%]\s*(\d{1,2}(?:\.\d+)?))"));  // %9, ％9 (OCR misread)
     QRegularExpression labelRe(QStringLiteral(R"((?:税率|征收率)[：:\s]*([0-9]{1,2}(?:\.\d+)?))"));
 
     for (const QString &lineRaw : lines) {
@@ -456,6 +507,16 @@ double extractTaxRateFromText(const QString &rawText)
                     return v;
                 }
             }
+            // Also try reversed format (%9 instead of 9%)
+            QRegularExpressionMatch m2r = pctReReversed.match(line);
+            if (m2r.hasMatch()) {
+                bool ok = false;
+                double v = m2r.captured(1).toDouble(&ok);
+                if (ok && v > 0.0 && v <= 100.0) {
+                    debugLog(QString("  Found tax rate (reversed) in tax line: %1% from line: %2").arg(v).arg(line));
+                    return v;
+                }
+            }
         }
     }
 
@@ -466,6 +527,17 @@ double extractTaxRateFromText(const QString &rawText)
         double v = m.captured(1).toDouble(&ok);
         if (ok && v > 0.0 && v <= 100.0) {
             debugLog(QString("  Found tax rate fallback: %1%").arg(v));
+            return v;
+        }
+    }
+
+    // Fallback: try reversed percentage format (%9 instead of 9%)
+    QRegularExpressionMatch mr = pctReReversed.match(rawText);
+    if (mr.hasMatch()) {
+        bool ok = false;
+        double v = mr.captured(1).toDouble(&ok);
+        if (ok && v > 0.0 && v <= 100.0) {
+            debugLog(QString("  Found tax rate fallback (reversed): %1%").arg(v));
             return v;
         }
     }
