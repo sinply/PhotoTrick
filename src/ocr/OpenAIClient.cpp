@@ -6,6 +6,49 @@
 #include <QJsonArray>
 #include <QBuffer>
 
+namespace {
+QJsonDocument tryParseJson(QString text)
+{
+    text = text.trimmed();
+    if (text.startsWith("```")) {
+        int firstNewline = text.indexOf('\n');
+        if (firstNewline >= 0) {
+            text = text.mid(firstNewline + 1);
+        }
+        if (text.endsWith("```")) {
+            text.chop(3);
+        }
+        text = text.trimmed();
+    }
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
+    if (!doc.isNull()) {
+        return doc;
+    }
+
+    int firstBrace = text.indexOf('{');
+    int lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        doc = QJsonDocument::fromJson(text.mid(firstBrace, lastBrace - firstBrace + 1).toUtf8(), &err);
+        if (!doc.isNull()) {
+            return doc;
+        }
+    }
+
+    int firstBracket = text.indexOf('[');
+    int lastBracket = text.lastIndexOf(']');
+    if (firstBracket >= 0 && lastBracket > firstBracket) {
+        doc = QJsonDocument::fromJson(text.mid(firstBracket, lastBracket - firstBracket + 1).toUtf8(), &err);
+        if (!doc.isNull()) {
+            return doc;
+        }
+    }
+
+    return QJsonDocument();
+}
+}
+
 OpenAIClient::OpenAIClient(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
@@ -133,9 +176,13 @@ void OpenAIClient::handleResponse(QNetworkReply *reply)
             QString text = choices[0].toObject()["message"].toObject()["content"].toString();
 
             // Try to parse as JSON
-            QJsonDocument textDoc = QJsonDocument::fromJson(text.toUtf8());
+            QJsonDocument textDoc = tryParseJson(text);
             if (!textDoc.isNull()) {
-                output = textDoc.object();
+                if (textDoc.isObject()) {
+                    output = textDoc.object();
+                } else if (textDoc.isArray()) {
+                    output["tables"] = textDoc.array();
+                }
             } else {
                 output["text"] = text;
             }

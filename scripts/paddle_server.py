@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PaddleOCR Local Server
+OCR Local Server
 提供HTTP API接口进行OCR识别
+支持RapidOCR（基于ONNX Runtime，无CPU指令集问题）
 """
 
 import os
 import base64
 import io
+import numpy as np
 from flask import Flask, request, jsonify
 from PIL import Image
 
 try:
-    from paddleocr import PaddleOCR
-    HAS_PADDLE = True
+    from rapidocr_onnxruntime import RapidOCR
+    HAS_RAPIDOCR = True
 except ImportError:
-    HAS_PADDLE = False
-    print("Warning: PaddleOCR not installed. Install with: pip install paddleocr")
+    HAS_RAPIDOCR = False
+    print("Warning: RapidOCR not installed. Install with: pip install rapidocr-onnxruntime")
 
 app = Flask(__name__)
 
@@ -24,12 +26,10 @@ app = Flask(__name__)
 ocr_engine = None
 
 def init_ocr():
-    """初始化PaddleOCR引擎"""
+    """初始化OCR引擎"""
     global ocr_engine
-    if HAS_PADDLE and ocr_engine is None:
-        # use_angle_cls=True 用于识别旋转文字
-        # lang='ch' 支持中英文
-        ocr_engine = PaddleOCR(use_angle_cls=True, lang='ch', show_log=False)
+    if HAS_RAPIDOCR and ocr_engine is None:
+        ocr_engine = RapidOCR()
     return ocr_engine
 
 
@@ -38,7 +38,7 @@ def health_check():
     """健康检查"""
     return jsonify({
         'status': 'ok',
-        'paddle_ocr': HAS_PADDLE
+        'paddle_ocr': HAS_RAPIDOCR
     })
 
 
@@ -55,8 +55,8 @@ def ocr_recognize():
         }
     }
     """
-    if not HAS_PADDLE:
-        return jsonify({'error': 'PaddleOCR未安装'}), 500
+    if not HAS_RAPIDOCR:
+        return jsonify({'error': 'RapidOCR未安装'}), 500
 
     try:
         data = request.get_json()
@@ -76,94 +76,90 @@ def ocr_recognize():
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
-        # 保存为临时文件（PaddleOCR需要文件路径）
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            image.save(tmp.name, 'JPEG')
-            tmp_path = tmp.name
+        # 转换为numpy数组（RapidOCR需要）
+        img_array = np.array(image)
 
-        try:
-            # 执行OCR
-            options = data.get('options', {})
-            detect_table = options.get('detect_table', False)
+        # 执行OCR
+        options = data.get('options', {})
+        detect_table = options.get('detect_table', False)
 
-            if detect_table:
-                # 表格识别
-                result = ocr_engine.ocr(tmp_path, cls=True)
-                tables = extract_tables(result)
-                return jsonify({
-                    'success': True,
-                    'tables': tables,
-                    'raw_result': format_ocr_result(result)
-                })
-            else:
-                # 普通OCR
-                result = ocr_engine.ocr(tmp_path, cls=True)
-                return jsonify({
-                    'success': True,
-                    'text': format_ocr_result(result),
-                    'boxes': format_ocr_with_boxes(result) if options.get('return_boxes') else None
-                })
-        finally:
-            # 清理临时文件
-            os.unlink(tmp_path)
+        # RapidOCR返回: (result, elapse)
+        # result是列表，每个元素是 [box, text, score]
+        result, elapse = ocr_engine(img_array)
+
+        if result is None or len(result) == 0:
+            return jsonify({
+                'success': True,
+                'text': '',
+                'boxes': None
+            })
+
+        # 解析结果
+        boxes = []
+        texts = []
+        scores = []
+        for item in result:
+            if len(item) >= 3:
+                boxes.append(item[0])  # box坐标
+                texts.append(item[1])  # 文本
+                scores.append(item[2])  # 置信度
+
+        if detect_table:
+            # 表格识别
+            tables = extract_tables_rapid(boxes, texts)
+            return jsonify({
+                'success': True,
+                'tables': tables,
+                'raw_result': '\n'.join(texts) if texts else ''
+            })
+        else:
+            # 普通OCR
+            return jsonify({
+                'success': True,
+                'text': '\n'.join(texts) if texts else '',
+                'boxes': format_ocr_with_boxes_rapid(boxes, texts, scores) if options.get('return_boxes') else None
+            })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
-def format_ocr_result(result):
-    """格式化OCR结果为纯文本"""
-    if not result or not result[0]:
-        return ""
-
-    lines = []
-    for line in result[0]:
-        if line and len(line) >= 2:
-            text = line[1][0]  # 文本内容
-            lines.append(text)
-
-    return '\n'.join(lines)
-
-
-def format_ocr_with_boxes(result):
-    """格式化OCR结果，包含文字框坐标"""
-    if not result or not result[0]:
+def format_ocr_with_boxes_rapid(boxes, texts, scores):
+    """格式化RapidOCR结果，包含文字框坐标"""
+    if not boxes or not texts:
         return []
 
-    boxes = []
-    for line in result[0]:
-        if line and len(line) >= 2:
-            box = {
-                'points': line[0],  # 四个角坐标
-                'text': line[1][0],  # 文本
-                'confidence': line[1][1]  # 置信度
-            }
-            boxes.append(box)
+    result = []
+    for i, (box, text) in enumerate(zip(boxes, texts)):
+        score = scores[i] if scores and i < len(scores) else 0.0
+        result.append({
+            'points': box.tolist() if hasattr(box, 'tolist') else box,
+            'text': text,
+            'confidence': float(score)
+        })
 
-    return boxes
+    return result
 
 
-def extract_tables(result):
+def extract_tables_rapid(boxes, texts):
     """从OCR结果中提取表格结构"""
-    if not result or not result[0]:
+    if not boxes or not texts:
         return []
 
     # 简单的表格检测逻辑
     # 基于文字框的位置信息判断行列
     lines = []
-    for line in result[0]:
-        if line and len(line) >= 2:
-            points = line[0]
-            text = line[1][0]
-            # 计算中心点Y坐标
-            y_center = (points[0][1] + points[2][1]) / 2
-            x_left = points[0][0]
-            lines.append({
-                'text': text,
-                'y': y_center,
-                'x': x_left
-            })
+    for box, text in zip(boxes, texts):
+        # 计算中心点Y坐标
+        y_center = (box[0][1] + box[2][1]) / 2
+        x_left = box[0][0]
+        lines.append({
+            'text': text,
+            'y': float(y_center),
+            'x': float(x_left)
+        })
 
     if not lines:
         return []
@@ -204,10 +200,10 @@ def extract_tables(result):
 def table_recognize():
     """
     表格识别专用接口
-    使用PP-Structure进行表格结构识别
+    使用OCR结果进行表格结构识别
     """
-    if not HAS_PADDLE:
-        return jsonify({'error': 'PaddleOCR未安装'}), 500
+    if not HAS_RAPIDOCR:
+        return jsonify({'error': 'RapidOCR未安装'}), 500
 
     try:
         data = request.get_json()
@@ -225,69 +221,40 @@ def table_recognize():
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
-        # 保存临时文件
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            image.save(tmp.name, 'JPEG')
-            tmp_path = tmp.name
+        img_array = np.array(image)
 
-        try:
-            # 使用PP-Structure进行表格识别
-            # 注意：需要安装 paddleocr[full] 或单独安装 table-engine
-            from paddleocr import PPStructure
+        # 执行OCR
+        result, elapse = ocr_engine(img_array)
 
-            table_engine = PPStructure(show_log=False, use_angle_cls=True, lang='ch')
-            result = table_engine(tmp_path)
-
-            tables = []
-            for region in result:
-                if region['type'] == 'table':
-                    # 解析HTML表格
-                    html = region.get('res', {}).get('html', '')
-                    if html:
-                        tables.append(parse_html_table(html))
-
+        if result is None or len(result) == 0:
             return jsonify({
                 'success': True,
-                'tables': tables
+                'tables': []
             })
 
-        finally:
-            os.unlink(tmp_path)
+        # 解析结果
+        boxes = []
+        texts = []
+        for item in result:
+            if len(item) >= 2:
+                boxes.append(item[0])
+                texts.append(item[1])
+
+        tables = extract_tables_rapid(boxes, texts)
+
+        return jsonify({
+            'success': True,
+            'tables': tables
+        })
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
-def parse_html_table(html):
-    """解析HTML表格为结构化数据"""
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(html, 'html.parser')
-    table = soup.find('table')
-
-    if not table:
-        return {'headers': [], 'rows': []}
-
-    rows = []
-    for tr in table.find_all('tr'):
-        cells = []
-        for cell in tr.find_all(['th', 'td']):
-            cells.append(cell.get_text(strip=True))
-        if cells:
-            rows.append(cells)
-
-    if not rows:
-        return {'headers': [], 'rows': []}
-
-    return {
-        'headers': rows[0],
-        'rows': rows[1:]
-    }
-
-
 if __name__ == '__main__':
-    print("初始化PaddleOCR引擎...")
+    print("初始化OCR引擎...")
     init_ocr()
 
     print("启动OCR服务器，端口: 5000")

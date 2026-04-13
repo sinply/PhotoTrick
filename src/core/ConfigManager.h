@@ -40,6 +40,24 @@ public:
     QString defaultExportFormat() const;
     void setDefaultExportFormat(const QString &format);
 
+    // OCR Server settings
+    QString pythonPath() const;
+    void setPythonPath(const QString &path);
+
+    QString ocrServerPath() const;
+    void setOcrServerPath(const QString &path);
+
+    bool autoStartOcrServer() const;
+    void setAutoStartOcrServer(bool autoStart);
+
+    bool stopOcrServerOnExit() const;
+    void setStopOcrServerOnExit(bool stop);
+
+    // File history
+    QStringList recentFiles() const;
+    void addRecentFile(const QString &filePath);
+    void clearRecentFiles();
+
     // Load/Save
     void load();
     void save();

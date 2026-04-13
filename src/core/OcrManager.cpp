@@ -1,4 +1,5 @@
 #include "OcrManager.h"
+#include "ConfigManager.h"
 #include "ocr/OcrInterface.h"
 #include "ocr/PaddleOcr.h"
 #include "ocr/ClaudeClient.h"
@@ -13,6 +14,8 @@ OcrManager::OcrManager(QObject *parent)
 
 void OcrManager::setBackend(Backend backend)
 {
+    // Note: We don't stop the OCR server when switching to online mode
+    // The server keeps running so it's immediately available when switching back
     if (m_currentClient) {
         delete m_currentClient;
         m_currentClient = nullptr;
@@ -34,7 +37,9 @@ void OcrManager::setBackend(Backend backend)
 
     if (m_currentClient) {
         m_currentClient->setApiKey(m_apiKey);
-        m_currentClient->setBaseUrl(m_baseUrl);
+        if (!m_baseUrl.isEmpty()) {
+            m_currentClient->setBaseUrl(m_baseUrl);
+        }
         m_currentClient->setModel(m_model);
 
         connect(m_currentClient, &OcrInterface::recognitionFinished,
@@ -43,6 +48,20 @@ void OcrManager::setBackend(Backend backend)
                 this, &OcrManager::recognitionError);
         connect(m_currentClient, &OcrInterface::progress,
                 this, &OcrManager::progress);
+    }
+
+    // Auto-start local OCR server if switching to PaddleOCR_Local
+    if (backend == PaddleOCR_Local && ConfigManager::instance()->autoStartOcrServer()) {
+        auto *paddleOcr = qobject_cast<PaddleOcr*>(m_currentClient);
+        if (paddleOcr) {
+            // Connect server status signal
+            connect(paddleOcr, &PaddleOcr::serverStatusChanged,
+                    this, &OcrManager::serverStatusChanged);
+
+            if (!paddleOcr->isServerRunning()) {
+                paddleOcr->startServer();
+            }
+        }
     }
 }
 
@@ -103,4 +122,12 @@ void OcrManager::recognizeImages(const QList<QImage> &images, const QString &pro
     }
 
     emit progress(100);
+}
+
+PaddleOcr* OcrManager::paddleOcrClient() const
+{
+    if (m_backend == PaddleOCR_Local) {
+        return qobject_cast<PaddleOcr*>(m_currentClient);
+    }
+    return nullptr;
 }

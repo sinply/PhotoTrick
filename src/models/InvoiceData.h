@@ -63,6 +63,10 @@ struct InvoiceData {
     // Source
     QString sourceFile;     // 源文件路径
 
+    // Validation
+    bool isValidInvoice = false;    // 是否为有效发票
+    QString invalidReason;          // 非发票原因说明
+
     // Serialization
     QJsonObject toJson() const;
     static InvoiceData fromJson(const QJsonObject &json);

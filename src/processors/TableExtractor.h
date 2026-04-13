@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QImage>
+#include <QJsonObject>
 #include "../models/TableData.h"
 
 class OcrManager;
@@ -22,14 +23,17 @@ public:
 signals:
     void extractionFinished(const TableData &table);
     void extractionError(const QString &error);
+    void rawOcrReceived(const QJsonObject &result);
 
 private slots:
     void onOcrFinished(const QJsonObject &result);
+    void onOcrError(const QString &error);
 
 private:
     TableData parseTableData(const QJsonObject &json);
 
     OcrManager *m_ocrManager;
+    bool m_isExtracting = false;
 
     // Prompt template for table extraction
     static const QString TABLE_PROMPT;

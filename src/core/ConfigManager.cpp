@@ -94,6 +94,75 @@ void ConfigManager::setDefaultExportFormat(const QString &format)
     m_settings->setValue("exportFormat", format);
 }
 
+QString ConfigManager::pythonPath() const
+{
+#ifdef Q_OS_WIN
+    // On Windows, use WSL by default (wsl python3)
+    return m_settings->value("pythonPath", "wsl").toString();
+#else
+    return m_settings->value("pythonPath", "python3").toString();
+#endif
+}
+
+void ConfigManager::setPythonPath(const QString &path)
+{
+    m_settings->setValue("pythonPath", path);
+}
+
+QString ConfigManager::ocrServerPath() const
+{
+    return m_settings->value("ocrServerPath", "scripts/paddle_server.py").toString();
+}
+
+void ConfigManager::setOcrServerPath(const QString &path)
+{
+    m_settings->setValue("ocrServerPath", path);
+}
+
+bool ConfigManager::autoStartOcrServer() const
+{
+    return m_settings->value("autoStartOcrServer", true).toBool();
+}
+
+void ConfigManager::setAutoStartOcrServer(bool autoStart)
+{
+    m_settings->setValue("autoStartOcrServer", autoStart);
+}
+
+bool ConfigManager::stopOcrServerOnExit() const
+{
+    return m_settings->value("stopOcrServerOnExit", true).toBool();
+}
+
+void ConfigManager::setStopOcrServerOnExit(bool stop)
+{
+    m_settings->setValue("stopOcrServerOnExit", stop);
+}
+
+QStringList ConfigManager::recentFiles() const
+{
+    return m_settings->value("recentFiles").toStringList();
+}
+
+void ConfigManager::addRecentFile(const QString &filePath)
+{
+    QStringList files = recentFiles();
+    // Remove if already exists
+    files.removeAll(filePath);
+    // Add to front
+    files.prepend(filePath);
+    // Keep only last 20 files
+    while (files.size() > 20) {
+        files.removeLast();
+    }
+    m_settings->setValue("recentFiles", files);
+}
+
+void ConfigManager::clearRecentFiles()
+{
+    m_settings->remove("recentFiles");
+}
+
 void ConfigManager::load()
 {
     m_settings->sync();

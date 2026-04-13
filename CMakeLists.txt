@@ -81,6 +81,8 @@ set(EXPORTER_SOURCES
 # OCR sources
 set(OCR_SOURCES
     src/ocr/OcrInterface.h
+    src/ocr/OcrServerManager.cpp
+    src/ocr/OcrServerManager.h
     src/ocr/PaddleOcr.cpp
     src/ocr/PaddleOcr.h
     src/ocr/ClaudeClient.cpp
@@ -115,6 +117,12 @@ qt_add_executable(PhotoTrick WIN32
     ${OCR_SOURCES}
     ${UI_SOURCES}
 )
+
+# Windows icon
+if(WIN32)
+    set(APP_ICON_RESOURCE_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc")
+    target_sources(PhotoTrick PRIVATE ${APP_ICON_RESOURCE_WINDOWS})
+endif()
 
 target_include_directories(PhotoTrick PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -1,5 +1,7 @@
 <RCC>
     <qresource prefix="/">
-        <file>../resources/styles/main.qss</file>
+        <file alias="styles/main.qss">../resources/styles/main.qss</file>
+        <file alias="icons/app.png">../resources/icons/app.png</file>
+        <file alias="icons/app.svg">../resources/icons/app.svg</file>
     </qresource>
 </RCC>

@@ -65,6 +65,8 @@ QJsonObject InvoiceData::toJson() const
 
     obj["confidence"] = confidence;
     obj["sourceFile"] = sourceFile;
+    obj["isValidInvoice"] = isValidInvoice;
+    obj["invalidReason"] = invalidReason;
 
     return obj;
 }
@@ -91,6 +93,8 @@ InvoiceData InvoiceData::fromJson(const QJsonObject &json)
     data.stayDays = json["stayDays"].toInt();
     data.confidence = json["confidence"].toDouble();
     data.sourceFile = json["sourceFile"].toString();
+    data.isValidInvoice = json["isValidInvoice"].toBool(false);
+    data.invalidReason = json["invalidReason"].toString();
 
     if (json.contains("items")) {
         QJsonArray itemsArray = json["items"].toArray();

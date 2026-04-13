@@ -6,6 +6,7 @@
 #include <QJsonObject>
 
 class OcrInterface;
+class PaddleOcr;
 
 class OcrManager : public QObject
 {
@@ -30,11 +31,14 @@ public:
     void recognizeImage(const QImage &image, const QString &prompt);
     void recognizeImages(const QList<QImage> &images, const QString &prompt);
 
+    PaddleOcr* paddleOcrClient() const;
+
 signals:
     void recognitionStarted();
     void recognitionFinished(const QJsonObject &result);
     void recognitionError(const QString &error);
     void progress(int percent);
+    void serverStatusChanged(int status);
 
 private:
     Backend m_backend;

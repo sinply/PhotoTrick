@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QMap>
+#include <QMenu>
 
 class FileListView : public QWidget
 {
@@ -19,6 +20,8 @@ public:
     void clearFiles();
     int fileCount() const;
     QStringList getFiles() const;
+    void loadRecentFiles();
+    void saveRecentFiles();
 
 signals:
     void filesAdded(int count);
@@ -29,6 +32,7 @@ private slots:
     void onRemoveSelected();
     void onClearAll();
     void onItemSelectionChanged();
+    void onRecentFileTriggered();
 
 private:
     void setupUI();
@@ -36,6 +40,7 @@ private:
     bool isFileSupported(const QString &filePath) const;
     QString getFileTypeIcon(const QString &filePath) const;
     void addFileItem(const QString &filePath);
+    void updateRecentMenu();
 
     QListWidget *m_listWidget;
     QPushButton *m_btnAddFiles;
@@ -43,6 +48,7 @@ private:
     QPushButton *m_btnRemove;
     QPushButton *m_btnClear;
     QLabel *m_labelCount;
+    QMenu *m_recentMenu;
 
     QMap<QString, QString> m_filePaths; // display name -> full path
 };

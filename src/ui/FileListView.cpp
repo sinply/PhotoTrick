@@ -1,4 +1,5 @@
 #include "FileListView.h"
+#include "core/ConfigManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QDir>
@@ -6,6 +7,7 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QToolButton>
 
 FileListView::FileListView(QWidget *parent)
     : QWidget(parent)
@@ -15,9 +17,11 @@ FileListView::FileListView(QWidget *parent)
     , m_btnRemove(nullptr)
     , m_btnClear(nullptr)
     , m_labelCount(nullptr)
+    , m_recentMenu(nullptr)
 {
     setupUI();
     setupConnections();
+    loadRecentFiles();
 }
 
 void FileListView::setupUI()
@@ -32,6 +36,15 @@ void FileListView::setupUI()
 
     m_btnAddFiles = new QPushButton(tr("添加文件"), this);
     m_btnAddFolder = new QPushButton(tr("添加文件夹"), this);
+
+    // Recent files button with dropdown menu
+    QToolButton *btnRecent = new QToolButton(this);
+    btnRecent->setText(tr("最近文件"));
+    btnRecent->setPopupMode(QToolButton::InstantPopup);
+    m_recentMenu = new QMenu(this);
+    btnRecent->setMenu(m_recentMenu);
+    updateRecentMenu();
+
     m_btnRemove = new QPushButton(tr("删除"), this);
     m_btnClear = new QPushButton(tr("清空"), this);
 
@@ -40,6 +53,7 @@ void FileListView::setupUI()
 
     toolbarLayout->addWidget(m_btnAddFiles);
     toolbarLayout->addWidget(m_btnAddFolder);
+    toolbarLayout->addWidget(btnRecent);
     toolbarLayout->addStretch();
     toolbarLayout->addWidget(m_btnRemove);
     toolbarLayout->addWidget(m_btnClear);
@@ -88,12 +102,15 @@ void FileListView::addFiles(const QStringList &files)
         if (isFileSupported(file) && !m_filePaths.values().contains(file)) {
             addFileItem(file);
             addedCount++;
+            // Add to recent files
+            ConfigManager::instance()->addRecentFile(file);
         }
     }
 
     if (addedCount > 0) {
         m_labelCount->setText(tr("共 %1 个文件").arg(m_filePaths.size()));
         emit filesAdded(addedCount);
+        updateRecentMenu();
     }
 }
 
@@ -135,9 +152,8 @@ void FileListView::onRemoveSelected()
 {
     QList<QListWidgetItem*> selected = m_listWidget->selectedItems();
     for (QListWidgetItem *item : selected) {
-        QString displayText = item->text().split('\n').first();
-        QString filePath = m_filePaths.value(displayText);
-        m_filePaths.remove(displayText);
+        QString filePath = item->data(Qt::UserRole).toString();
+        m_filePaths.remove(filePath);  // Use full path as key
         emit fileRemoved(filePath);
         delete item;
     }
@@ -162,8 +178,7 @@ void FileListView::onItemSelectionChanged()
 {
     QList<QListWidgetItem*> selected = m_listWidget->selectedItems();
     if (selected.size() == 1) {
-        QString displayText = selected.first()->text().split('\n').first();
-        QString filePath = m_filePaths.value(displayText);
+        QString filePath = selected.first()->data(Qt::UserRole).toString();
         emit selectionChanged(filePath);
     }
 }
@@ -203,5 +218,52 @@ void FileListView::addFileItem(const QString &filePath)
     item->setData(Qt::UserRole, filePath);
     item->setToolTip(filePath);
 
-    m_filePaths[info.fileName()] = filePath;
+    m_filePaths[filePath] = filePath;  // Use full path as key to avoid duplicates
+}
+
+void FileListView::loadRecentFiles()
+{
+    // Just update the menu, don't auto-add files
+    updateRecentMenu();
+}
+
+void FileListView::saveRecentFiles()
+{
+    // ConfigManager handles this automatically via addRecentFile
+}
+
+void FileListView::updateRecentMenu()
+{
+    m_recentMenu->clear();
+
+    QStringList recent = ConfigManager::instance()->recentFiles();
+    if (recent.isEmpty()) {
+        QAction *emptyAction = m_recentMenu->addAction(tr("无最近文件"));
+        emptyAction->setEnabled(false);
+    } else {
+        for (const QString &file : recent) {
+            QFileInfo info(file);
+            if (info.exists()) {
+                QAction *action = m_recentMenu->addAction(getFileTypeIcon(file) + " " + info.fileName());
+                action->setData(file);
+                connect(action, &QAction::triggered, this, &FileListView::onRecentFileTriggered);
+            }
+        }
+        m_recentMenu->addSeparator();
+        QAction *clearAction = m_recentMenu->addAction(tr("清空历史"));
+        connect(clearAction, &QAction::triggered, this, []() {
+            ConfigManager::instance()->clearRecentFiles();
+        });
+    }
+}
+
+void FileListView::onRecentFileTriggered()
+{
+    QAction *action = qobject_cast<QAction*>(sender());
+    if (action) {
+        QString filePath = action->data().toString();
+        if (!filePath.isEmpty() && isFileSupported(filePath)) {
+            addFiles(QStringList() << filePath);
+        }
+    }
 }

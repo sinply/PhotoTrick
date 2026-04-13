@@ -48,6 +48,17 @@ env/
 *.log
 *~
 
+# Generated reports
+处理报告_*.md
+_batch_summary.md
+
+# OCR server
+ocr_server.pid
+ocr_server.log
+
+# Debug logs
+invoice_debug.log
+
 # OS files
 .DS_Store
 Thumbs.db

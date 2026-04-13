@@ -3,12 +3,32 @@
 #include <QDir>
 #include <QTemporaryFile>
 #include <QDebug>
+#include <QCoreApplication>
+
+// Helper function to convert Windows path to WSL path
+static QString convertToWslPath(const QString &windowsPath)
+{
+    QString path = windowsPath;
+    // Convert D:/path or D:\path to /mnt/d/path
+    if (path.length() >= 2 && path[1] == ':') {
+        QString driveLetter = path.left(1).toLower();
+        QString pathPart = path.mid(2).replace('\\', '/');
+        path = QString("/mnt/%1%2").arg(driveLetter, pathPart);
+    }
+    return path;
+}
 
 FileConverter::FileConverter(QObject *parent)
     : QObject(parent)
     , m_pythonPath("python")
-    , m_scriptPath("scripts/file_converter.py")
+    , m_scriptPath("scripts/file_converter_cli.py")
 {
+    // If script path is relative, make it absolute based on application directory
+    QFileInfo scriptInfo(m_scriptPath);
+    if (scriptInfo.isRelative()) {
+        QString appDir = QCoreApplication::applicationDirPath();
+        m_scriptPath = appDir + "/" + m_scriptPath;
+    }
 }
 
 bool FileConverter::convertToImage(const QString &filePath, QImage &outImage)
@@ -195,12 +215,55 @@ bool FileConverter::runPythonConverter(const QString &action, const QString &fil
     QProcess process;
     QStringList args;
 
-    args << m_scriptPath
-         << "--action" << action
-         << "--input" << filePath
-         << "--output" << outputPath;
+    QString pythonCmd = m_pythonPath;
+    QString scriptPath = m_scriptPath;
+    QString inputPath = filePath;
+    QString outPath = outputPath;
 
-    process.start(m_pythonPath, args);
+#ifdef Q_OS_WIN
+    // On Windows: check if using WSL
+    if (m_pythonPath == "python" || m_pythonPath.isEmpty() || m_pythonPath == "wsl" || m_pythonPath.endsWith("wsl.exe")) {
+        // Convert Windows paths to WSL paths
+        inputPath = convertToWslPath(filePath);
+        outPath = convertToWslPath(outputPath);
+        scriptPath = convertToWslPath(m_scriptPath);
+
+        args << "python3" << scriptPath
+             << "--action" << action
+             << "--input" << inputPath
+             << "--output" << outPath;
+        pythonCmd = "wsl.exe";
+    } else if (m_pythonPath == "python3") {
+        // python3 on Windows typically means WSL
+        inputPath = convertToWslPath(filePath);
+        outPath = convertToWslPath(outputPath);
+        scriptPath = convertToWslPath(m_scriptPath);
+
+        args << "python3" << scriptPath
+             << "--action" << action
+             << "--input" << inputPath
+             << "--output" << outPath;
+        pythonCmd = "wsl.exe";
+    } else {
+        // Native Python on Windows
+        args << scriptPath
+             << "--action" << action
+             << "--input" << inputPath
+             << "--output" << outPath;
+    }
+#else
+    // Linux/Mac: use python3 directly
+    args << scriptPath
+         << "--action" << action
+         << "--input" << inputPath
+         << "--output" << outPath;
+    if (pythonCmd.isEmpty()) {
+        pythonCmd = "python3";
+    }
+#endif
+
+    qDebug() << "FileConverter: Running:" << pythonCmd << args.join(" ");
+    process.start(pythonCmd, args);
 
     if (!process.waitForStarted()) {
         qWarning() << "Failed to start Python converter:" << process.errorString();
