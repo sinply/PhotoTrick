@@ -442,7 +442,11 @@ double extractLabeledAmount(const QString &rawText, const QStringList &positiveL
     }
 
     std::sort(candidates.begin(), candidates.end(), [](const AmountCandidate &a, const AmountCandidate &b) {
-        return a.score > b.score;
+        if (a.score != b.score) {
+            return a.score > b.score;
+        }
+        // When scores are equal, prefer larger values for total amounts
+        return a.value > b.value;
     });
 
     debugLog(QString("  Top 3 candidates:"));
