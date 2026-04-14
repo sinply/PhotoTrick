@@ -531,6 +531,7 @@ double extractTaxRateFromText(const QString &rawText)
     }
 
     // Fallback: find any percentage in text (must be valid tax rate)
+    // Normal format: "9%" means 9% tax rate
     QRegularExpressionMatch m = pctRe.match(rawText);
     if (m.hasMatch()) {
         bool ok = false;
@@ -542,14 +543,23 @@ double extractTaxRateFromText(const QString &rawText)
     }
 
     // Fallback: try reversed percentage format (%9 instead of 9%)
-    // This means OCR put % before the number, actual value is 9%
+    // This means OCR misread the position AND likely misread 6 as 9
+    // %9 usually means the original was 6% (OCR confused 6->9 and % position)
     QRegularExpressionMatch mr = pctReReversed.match(rawText);
     if (mr.hasMatch()) {
         bool ok = false;
         double v = mr.captured(1).toDouble(&ok);
-        if (ok && isValidTaxRate(v)) {
-            debugLog(QString("  Found tax rate fallback (reversed %%%1 -> %1%%)").arg(v));
-            return v;
+        if (ok) {
+            // %9 is almost always a misread of 6% (OCR confuses 6 and 9 visually)
+            if (qAbs(v - 9.0) < 0.01) {
+                debugLog(QString("  Found reversed %9, correcting to 6%% (OCR 6/9 confusion)"));
+                return 6.0;
+            }
+            // Other values like %6, %3, %13 are valid as-is
+            if (isValidTaxRate(v)) {
+                debugLog(QString("  Found tax rate fallback (reversed %%%1 -> %1%%)").arg(v));
+                return v;
+            }
         }
     }
 
