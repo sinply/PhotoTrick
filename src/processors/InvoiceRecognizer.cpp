@@ -476,6 +476,16 @@ double extractTaxRateFromText(const QString &rawText)
 
     debugLog("extractTaxRateFromText called");
 
+    // Common Chinese tax rates (小规模纳税人: 3%, 一般纳税人: 6%, 9%, 13%)
+    // Also support half rates for some special cases
+    const QList<double> validTaxRates = {3.0, 6.0, 9.0, 13.0, 1.5, 0.5, 0.03, 0.06, 0.09, 0.13};
+    auto isValidTaxRate = [&](double rate) -> bool {
+        for (double valid : validTaxRates) {
+            if (qAbs(rate - valid) < 0.01) return true;
+        }
+        return false;
+    };
+
     const QStringList lines = rawText.split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
     QRegularExpression pctRe(QStringLiteral(R"((\d{1,2}(?:\.\d+)?)\s*[％%])"));  // 9%, 9％
     QRegularExpression pctReReversed(QStringLiteral(R"([％%]\s*(\d{1,2}(?:\.\d+)?))"));  // %9, ％9 (OCR misread)
@@ -490,7 +500,7 @@ double extractTaxRateFromText(const QString &rawText)
         if (m1.hasMatch()) {
             bool ok = false;
             double v = m1.captured(1).toDouble(&ok);
-            if (ok && v > 0.0 && v <= 100.0) {
+            if (ok && isValidTaxRate(v)) {
                 debugLog(QString("  Found tax rate via label: %1% from line: %2").arg(v).arg(line));
                 return v;
             }
@@ -502,17 +512,17 @@ double extractTaxRateFromText(const QString &rawText)
             if (m2.hasMatch()) {
                 bool ok = false;
                 double v = m2.captured(1).toDouble(&ok);
-                if (ok && v > 0.0 && v <= 100.0) {
+                if (ok && isValidTaxRate(v)) {
                     debugLog(QString("  Found tax rate in tax line: %1% from line: %2").arg(v).arg(line));
                     return v;
                 }
             }
-            // Also try reversed format (%9 instead of 9%)
+            // Also try reversed format (%9 instead of 9%) - but validate
             QRegularExpressionMatch m2r = pctReReversed.match(line);
             if (m2r.hasMatch()) {
                 bool ok = false;
                 double v = m2r.captured(1).toDouble(&ok);
-                if (ok && v > 0.0 && v <= 100.0) {
+                if (ok && isValidTaxRate(v)) {
                     debugLog(QString("  Found tax rate (reversed) in tax line: %1% from line: %2").arg(v).arg(line));
                     return v;
                 }
@@ -520,25 +530,34 @@ double extractTaxRateFromText(const QString &rawText)
         }
     }
 
-    // Fallback: find any percentage in text
+    // Fallback: find any percentage in text (must be valid tax rate)
     QRegularExpressionMatch m = pctRe.match(rawText);
     if (m.hasMatch()) {
         bool ok = false;
         double v = m.captured(1).toDouble(&ok);
-        if (ok && v > 0.0 && v <= 100.0) {
+        if (ok && isValidTaxRate(v)) {
             debugLog(QString("  Found tax rate fallback: %1%").arg(v));
             return v;
         }
     }
 
     // Fallback: try reversed percentage format (%9 instead of 9%)
+    // IMPORTANT: OCR often misreads %6 as %9, so %9 should be treated as 6%
     QRegularExpressionMatch mr = pctReReversed.match(rawText);
     if (mr.hasMatch()) {
         bool ok = false;
         double v = mr.captured(1).toDouble(&ok);
-        if (ok && v > 0.0 && v <= 100.0) {
-            debugLog(QString("  Found tax rate fallback (reversed): %1%").arg(v));
-            return v;
+        if (ok) {
+            // %9 is almost always a misread %6 (OCR confuses 6 and 9)
+            if (qAbs(v - 9.0) < 0.01) {
+                debugLog(QString("  Found %9, treating as 6%% due to OCR confusion (6 vs 9)"));
+                return 6.0;
+            }
+            // Other reversed formats like %6, %3, %13 are valid
+            if (isValidTaxRate(v)) {
+                debugLog(QString("  Found tax rate fallback (reversed): %1%").arg(v));
+                return v;
+            }
         }
     }
 
