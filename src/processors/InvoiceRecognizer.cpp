@@ -379,6 +379,10 @@ double extractLabeledAmount(const QString &rawText, const QStringList &positiveL
                     baseScore += 5;
                     matchedLabels << label;
                 }
+                // "小写" and "价税合计" are strong indicators of total amount
+                if (label == QStringLiteral("小写") || label == QStringLiteral("价税合计")) {
+                    baseScore += 5;
+                }
             }
         }
 
@@ -1132,7 +1136,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     if (invoice.totalAmount == 0.0) {
         invoice.totalAmount = extractLabeledAmount(rawText, {
             QStringLiteral("价税合计"), QStringLiteral("合计"), QStringLiteral("总计"),
-            QStringLiteral("应付"), QStringLiteral("实付"), QStringLiteral("金额")
+            QStringLiteral("应付"), QStringLiteral("实付"), QStringLiteral("小写"), QStringLiteral("金额")
         });
     }
 
