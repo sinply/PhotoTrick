@@ -476,6 +476,12 @@ void MainWindow::onOcrBackendChanged(const QString &backend)
 
     qDebug() << "MainWindow: Setting OCR backend to" << backend;
     m_ocrManager->setBackend(ocrBackend);
+
+    // Load API settings for this backend
+    loadApiSettingsForBackend(backend);
+
+    // Save the selected backend
+    ConfigManager::instance()->setDefaultOcrBackend(backend);
 }
 
 void MainWindow::onServerStatusChanged(int status)
@@ -706,28 +712,65 @@ void MainWindow::onProcessingError(const QString &error)
 void MainWindow::loadApiSettings()
 {
     ConfigManager *cfg = ConfigManager::instance();
+    QString backend = cfg->defaultOcrBackend();
+    loadApiSettingsForBackend(backend);
+}
 
-    // Load API settings to processing panel
-    QString apiKey = cfg->apiKey();
-    QString baseUrl = cfg->baseUrl();
-    QString model = cfg->model();
+void MainWindow::loadApiSettingsForBackend(const QString &backend)
+{
+    ConfigManager *cfg = ConfigManager::instance();
+
+    // Load API settings for the specified backend
+    QString apiKey = cfg->apiKey(backend);
+    QString baseUrl = cfg->baseUrl(backend);
+    QString model = cfg->model(backend);
+
+    // Fallback to global settings if per-backend not found
+    if (apiKey.isEmpty()) apiKey = cfg->apiKey();
+    if (baseUrl.isEmpty()) baseUrl = cfg->baseUrl();
+    if (model.isEmpty()) model = cfg->model();
+
+    // Always update UI (even if empty, to clear previous values)
+    m_processingPanel->setApiKey(apiKey);
+    m_processingPanel->setBaseUrl(baseUrl);
+    m_processingPanel->setModel(model);
 
     if (!apiKey.isEmpty()) {
-        m_processingPanel->setApiKey(apiKey);
-        m_processingPanel->setBaseUrl(baseUrl);
-        m_processingPanel->setModel(model);
         m_processingPanel->setApiStatus(ProcessingPanel::ApiStatus::Configured);
+    } else {
+        m_processingPanel->setApiStatus(ProcessingPanel::ApiStatus::NotConfigured);
     }
+
+    // Sync to OcrManager
+    m_ocrManager->setApiKey(apiKey);
+    m_ocrManager->setBaseUrl(baseUrl);
+    m_ocrManager->setModel(model);
 }
 
 void MainWindow::saveApiSettings()
 {
     ConfigManager *cfg = ConfigManager::instance();
 
-    cfg->setApiKey(m_processingPanel->apiKey());
-    cfg->setBaseUrl(m_processingPanel->baseUrl());
-    cfg->setModel(m_processingPanel->model());
+    QString backend = m_processingPanel->ocrBackend();
+    QString apiKey = m_processingPanel->apiKey();
+    QString baseUrl = m_processingPanel->baseUrl();
+    QString model = m_processingPanel->model();
+
+    // Save per-backend settings
+    cfg->setApiKey(backend, apiKey);
+    cfg->setBaseUrl(backend, baseUrl);
+    cfg->setModel(backend, model);
+
+    // Also save as global for backward compatibility
+    cfg->setApiKey(apiKey);
+    cfg->setBaseUrl(baseUrl);
+    cfg->setModel(model);
     cfg->save();
+
+    // 同步传递到 OcrManager
+    m_ocrManager->setApiKey(apiKey);
+    m_ocrManager->setBaseUrl(baseUrl);
+    m_ocrManager->setModel(model);
 }
 
 void MainWindow::resetBatchResultTable()

@@ -58,6 +58,7 @@ private:
     void setupCentralWidget();
     void setupConnections();
     void loadApiSettings();
+    void loadApiSettingsForBackend(const QString &backend);
     void saveApiSettings();
 
     Ui::MainWindow *ui;

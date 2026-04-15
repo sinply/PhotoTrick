@@ -1,4 +1,5 @@
 #include "ApiConfigWidget.h"
+#include "../core/ConfigManager.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -8,7 +9,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QTimer>
 
 // Provider configurations
 struct ProviderConfig {
@@ -21,14 +21,12 @@ struct ProviderConfig {
 static const QMap<QString, ProviderConfig> PROVIDERS = {
     {"deepseek", {"DeepSeek", "https://api.deepseek.com", {"deepseek-chat"}, true}},
     {"glm", {"GLM (智谱)", "https://open.bigmodel.cn/api/paas/v4", {"glm-4v"}, true}},
-    {"qwen", {"通义千问 (暂不支持)", "https://dashscope.aliyuncs.com/compatible-mode", {"qwen-vl-plus"}, false}},
-    {"moonshot", {"月之暗面 (暂不支持)", "https://api.moonshot.cn", {"moonshot-v1-8k-vision"}, false}},
     {"custom", {"自定义", "", {}, true}}
 };
 
-ApiConfigWidget::ApiConfigWidget(QWidget *parent)
+ApiConfigWidget::ApiConfigWidget(const QString &backend, QWidget *parent)
     : QDialog(parent)
-    , m_comboFormat(nullptr)
+    , m_backend(backend)
     , m_comboProvider(nullptr)
     , m_editApiKey(nullptr)
     , m_editBaseUrl(nullptr)
@@ -39,33 +37,22 @@ ApiConfigWidget::ApiConfigWidget(QWidget *parent)
 {
     setupUI();
     setupConnections();
+    loadSettings();
 }
 
 void ApiConfigWidget::setupUI()
 {
-    setWindowTitle(tr("API配置"));
-    setMinimumSize(400, 300);
+    setWindowTitle(tr("API配置 - %1").arg(m_backend));
+    setMinimumSize(400, 280);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
     QFormLayout *form = new QFormLayout();
 
-    // API Format
-    m_comboFormat = new QComboBox(this);
-    m_comboFormat->addItem(tr("Claude兼容（推荐）"), "claude");
-    m_comboFormat->addItem(tr("OpenAI兼容"), "openai");
-    form->addRow(tr("API格式:"), m_comboFormat);
-
     // Provider
     m_comboProvider = new QComboBox(this);
     for (auto it = PROVIDERS.begin(); it != PROVIDERS.end(); ++it) {
         m_comboProvider->addItem(it.value().name, it.key());
-        int index = m_comboProvider->count() - 1;
-        if (!it.value().enabled) {
-            // 设置禁用项的样式为灰色
-            m_comboProvider->setItemData(index, QColor(128, 128, 128), Qt::ForegroundRole);
-            m_comboProvider->setItemData(index, false, Qt::UserRole - 1); // 禁用标志
-        }
     }
     form->addRow(tr("服务商:"), m_comboProvider);
 
@@ -80,11 +67,11 @@ void ApiConfigWidget::setupUI()
     m_editBaseUrl->setPlaceholderText(tr("自动填充，可修改"));
     form->addRow(tr("Base URL:"), m_editBaseUrl);
 
-    // Model - 使用可编辑的组合框
+    // Model - 可编辑的组合框
     m_comboModel = new QComboBox(this);
-    m_comboModel->setEditable(true);  // 允许编辑
+    m_comboModel->setEditable(true);
     m_comboModel->setInsertPolicy(QComboBox::InsertAtTop);
-    m_editModel = m_comboModel->lineEdit();  // 获取内部的LineEdit
+    m_editModel = m_comboModel->lineEdit();
     form->addRow(tr("模型:"), m_comboModel);
 
     // API Status
@@ -113,20 +100,86 @@ void ApiConfigWidget::setupUI()
     buttonLayout->addWidget(btnCancel);
     mainLayout->addLayout(buttonLayout);
 
-    connect(btnSave, &QPushButton::clicked, this, &QDialog::accept);
+    connect(btnSave, &QPushButton::clicked, this, &ApiConfigWidget::onSave);
     connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
-
-    // Initialize with first provider
-    onProviderChanged(0);
 }
 
 void ApiConfigWidget::setupConnections()
 {
-    connect(m_comboFormat, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &ApiConfigWidget::onFormatChanged);
     connect(m_comboProvider, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ApiConfigWidget::onProviderChanged);
     connect(m_btnTest, &QPushButton::clicked, this, &ApiConfigWidget::onTestConnection);
+}
+
+void ApiConfigWidget::loadSettings()
+{
+    ConfigManager *cfg = ConfigManager::instance();
+
+    // Load per-backend settings
+    QString savedProvider = cfg->value(QString("providers/%1").arg(m_backend)).toString();
+    QString savedApiKey = cfg->apiKey(m_backend);
+    QString savedBaseUrl = cfg->baseUrl(m_backend);
+    QString savedModel = cfg->model(m_backend);
+
+    // Block signals to prevent onProviderChanged from overwriting saved values
+    m_comboProvider->blockSignals(true);
+
+    // Set provider
+    if (!savedProvider.isEmpty()) {
+        int index = m_comboProvider->findData(savedProvider);
+        if (index >= 0) {
+            m_comboProvider->setCurrentIndex(index);
+        }
+    }
+
+    // Populate models for current provider (without triggering signal)
+    QString providerKey = m_comboProvider->currentData().toString();
+    if (PROVIDERS.contains(providerKey)) {
+        m_comboModel->clear();
+        for (const QString &model : PROVIDERS[providerKey].models) {
+            m_comboModel->addItem(model);
+        }
+    }
+
+    m_comboProvider->blockSignals(false);
+
+    // Set API key
+    m_editApiKey->setText(savedApiKey);
+
+    // Set base URL - saved value takes priority over provider default
+    if (!savedBaseUrl.isEmpty()) {
+        m_editBaseUrl->setText(savedBaseUrl);
+    } else if (PROVIDERS.contains(providerKey)) {
+        m_editBaseUrl->setText(PROVIDERS[providerKey].baseUrl);
+    }
+
+    // Set model
+    if (!savedModel.isEmpty()) {
+        m_comboModel->setEditText(savedModel);
+    }
+
+    // Update status
+    if (!savedApiKey.isEmpty()) {
+        setApiStatus(ApiStatus::Configured);
+    }
+}
+
+void ApiConfigWidget::saveSettings()
+{
+    ConfigManager *cfg = ConfigManager::instance();
+
+    // Save per-backend settings
+    cfg->setValue(QString("providers/%1").arg(m_backend), m_comboProvider->currentData().toString());
+    cfg->setApiKey(m_backend, m_editApiKey->text());
+    cfg->setBaseUrl(m_backend, m_editBaseUrl->text());
+    cfg->setModel(m_backend, m_comboModel->currentText().trimmed());
+    cfg->save();
+}
+
+void ApiConfigWidget::onSave()
+{
+    saveSettings();
+    accept();
 }
 
 void ApiConfigWidget::setApiKey(const QString &key)
@@ -141,11 +194,14 @@ void ApiConfigWidget::setBaseUrl(const QString &url)
 
 void ApiConfigWidget::setModel(const QString &model)
 {
-    int index = m_comboModel->findText(model);
+    m_comboModel->setEditText(model);
+}
+
+void ApiConfigWidget::setProvider(const QString &provider)
+{
+    int index = m_comboProvider->findData(provider);
     if (index >= 0) {
-        m_comboModel->setCurrentIndex(index);
-    } else {
-        m_comboModel->setEditText(model);
+        m_comboProvider->setCurrentIndex(index);
     }
 }
 
@@ -162,6 +218,11 @@ QString ApiConfigWidget::baseUrl() const
 QString ApiConfigWidget::model() const
 {
     return m_comboModel->currentText().trimmed();
+}
+
+QString ApiConfigWidget::provider() const
+{
+    return m_comboProvider->currentData().toString();
 }
 
 void ApiConfigWidget::setApiStatus(ApiStatus status, const QString &message)
@@ -196,41 +257,26 @@ void ApiConfigWidget::setApiStatus(ApiStatus status, const QString &message)
     m_labelApiStatus->setStyleSheet(style);
 }
 
-void ApiConfigWidget::onFormatChanged(int index)
-{
-    Q_UNUSED(index);
-    // Could adjust UI based on format if needed
-}
-
 void ApiConfigWidget::onProviderChanged(int index)
 {
     QString providerKey = m_comboProvider->itemData(index).toString();
 
-    // 检查是否禁用的服务商
-    QVariant disabledFlag = m_comboProvider->itemData(index, Qt::UserRole - 1);
-    if (disabledFlag.isValid() && !disabledFlag.toBool()) {
-        // 找到第一个可用的服务商并切换
-        for (int i = 0; i < m_comboProvider->count(); ++i) {
-            QString key = m_comboProvider->itemData(i).toString();
-            if (PROVIDERS.contains(key) && PROVIDERS[key].enabled) {
-                m_comboProvider->setCurrentIndex(i);
-                return;
-            }
-        }
-        return;
-    }
-
     if (PROVIDERS.contains(providerKey)) {
         const ProviderConfig &config = PROVIDERS[providerKey];
-        m_editBaseUrl->setText(config.baseUrl);
 
+        // Populate models
         m_comboModel->clear();
         for (const QString &model : config.models) {
             m_comboModel->addItem(model);
         }
+
+        // Auto-fill base URL only if empty (user hasn't entered anything)
+        if (m_editBaseUrl->text().trimmed().isEmpty()) {
+            m_editBaseUrl->setText(config.baseUrl);
+        }
     }
 
-    // Base URL始终可编辑，让用户可以自定义
+    // Base URL always editable
     m_editBaseUrl->setEnabled(true);
 }
 
@@ -256,10 +302,9 @@ void ApiConfigWidget::onTestConnection()
 
     QNetworkAccessManager *manager = new QNetworkAccessManager(this);
 
-    QString format = m_comboFormat->currentData().toString();
+    // Determine API endpoint based on backend type
     QString url = baseUrl;
-
-    if (format == "claude") {
+    if (m_backend == "claude_format") {
         url += "/v1/messages";
     } else {
         url += "/v1/chat/completions";
@@ -269,16 +314,10 @@ void ApiConfigWidget::onTestConnection()
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKey).toUtf8());
 
-    // Send a minimal request to test connection
     QJsonObject requestBody;
     requestBody["model"] = model;
     requestBody["max_tokens"] = 10;
-
-    if (format == "claude") {
-        requestBody["messages"] = QJsonArray{QJsonObject{{"role", "user"}, {"content", "Hi"}}};
-    } else {
-        requestBody["messages"] = QJsonArray{QJsonObject{{"role", "user"}, {"content", "Hi"}}};
-    }
+    requestBody["messages"] = QJsonArray{QJsonObject{{"role", "user"}, {"content", "Hi"}}};
 
     QNetworkReply *reply = manager->post(request, QJsonDocument(requestBody).toJson());
 
@@ -291,7 +330,6 @@ void ApiConfigWidget::onTestConnection()
             QMessageBox::information(this, tr("成功"), tr("连接成功！API Key有效。"));
         } else {
             QString errorMsg = reply->errorString();
-            // 尝试解析错误详情
             QByteArray responseData = reply->readAll();
             QJsonDocument doc = QJsonDocument::fromJson(responseData);
             if (doc.isObject()) {

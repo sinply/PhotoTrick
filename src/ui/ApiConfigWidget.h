@@ -12,15 +12,17 @@ class ApiConfigWidget : public QDialog
     Q_OBJECT
 
 public:
-    explicit ApiConfigWidget(QWidget *parent = nullptr);
+    explicit ApiConfigWidget(const QString &backend, QWidget *parent = nullptr);
 
     void setApiKey(const QString &key);
     void setBaseUrl(const QString &url);
     void setModel(const QString &model);
+    void setProvider(const QString &provider);
 
     QString apiKey() const;
     QString baseUrl() const;
     QString model() const;
+    QString provider() const;
 
     enum class ApiStatus {
         NotConfigured,
@@ -33,22 +35,24 @@ public:
     void setApiStatus(ApiStatus status, const QString &message = QString());
 
 private slots:
-    void onFormatChanged(int index);
     void onProviderChanged(int index);
     void onTestConnection();
+    void onSave();
 
 private:
     void setupUI();
     void setupConnections();
+    void loadSettings();
+    void saveSettings();
 
-    QComboBox *m_comboFormat;
+    QString m_backend;
     QComboBox *m_comboProvider;
     QLineEdit *m_editApiKey;
     QLineEdit *m_editBaseUrl;
     QComboBox *m_comboModel;
-    QLineEdit *m_editModel;  // 可编辑的模型输入
+    QLineEdit *m_editModel;
     QPushButton *m_btnTest;
-    QLabel *m_labelApiStatus;  // API状态显示
+    QLabel *m_labelApiStatus;
 };
 
 #endif // APICONFIGWIDGET_H

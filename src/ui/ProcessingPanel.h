@@ -100,6 +100,7 @@ private:
     // Current settings
     QString m_apiKey;
     QString m_baseUrl;
+    QString m_model;
 };
 
 #endif // PROCESSINGPANEL_H

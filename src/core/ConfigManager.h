@@ -26,7 +26,7 @@ public:
     QString defaultOcrBackend() const;
     void setDefaultOcrBackend(const QString &backend);
 
-    // API settings
+    // API settings (generic, use backend-specific methods for per-backend config)
     QString apiKey() const;
     void setApiKey(const QString &key);
 
@@ -35,6 +35,16 @@ public:
 
     QString model() const;
     void setModel(const QString &model);
+
+    // Per-backend API settings
+    QString apiKey(const QString &backend) const;
+    void setApiKey(const QString &backend, const QString &key);
+
+    QString baseUrl(const QString &backend) const;
+    void setBaseUrl(const QString &backend, const QString &url);
+
+    QString model(const QString &backend) const;
+    void setModel(const QString &backend, const QString &model);
 
     // Export settings
     QString defaultExportFormat() const;
@@ -61,6 +71,10 @@ public:
     // Load/Save
     void load();
     void save();
+
+    // Generic value access
+    QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
+    void setValue(const QString &key, const QVariant &value);
 
 private:
     explicit ConfigManager(QObject *parent = nullptr);

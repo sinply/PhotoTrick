@@ -152,7 +152,7 @@ QString ProcessingPanel::baseUrl() const
 
 QString ProcessingPanel::model() const
 {
-    return m_comboModel->currentText();
+    return m_model.isEmpty() ? m_comboModel->currentText() : m_model;
 }
 
 void ProcessingPanel::setApiKey(const QString &key)
@@ -167,6 +167,7 @@ void ProcessingPanel::setBaseUrl(const QString &url)
 
 void ProcessingPanel::setModel(const QString &model)
 {
+    m_model = model;
     int index = m_comboModel->findText(model);
     if (index >= 0) {
         m_comboModel->setCurrentIndex(index);
@@ -193,26 +194,25 @@ void ProcessingPanel::onBackendChanged(int index)
 
 void ProcessingPanel::onConfigureApi()
 {
-    ApiConfigWidget dialog(this);
+    QString backend = ocrBackend();
+    ApiConfigWidget dialog(backend, this);
+
+    // Pre-fill with current values
     dialog.setApiKey(m_apiKey);
     dialog.setBaseUrl(m_baseUrl);
-    dialog.setModel(m_comboModel->currentText());
+    dialog.setModel(m_model);
 
     if (dialog.exec() == QDialog::Accepted) {
         m_apiKey = dialog.apiKey();
         m_baseUrl = dialog.baseUrl();
+        m_model = dialog.model();
 
-        // 更新模型
-        if (!dialog.model().isEmpty()) {
-            int index = m_comboModel->findText(dialog.model());
-            if (index >= 0) {
-                m_comboModel->setCurrentIndex(index);
-            } else {
-                m_comboModel->setEditText(dialog.model());
-            }
+        // Update model combo
+        if (!m_model.isEmpty()) {
+            m_comboModel->setEditText(m_model);
         }
 
-        // 更新API状态
+        // Update API status
         if (!m_apiKey.isEmpty()) {
             setApiStatus(ApiStatus::Configured);
         } else {

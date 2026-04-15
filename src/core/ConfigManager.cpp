@@ -84,6 +84,37 @@ void ConfigManager::setModel(const QString &model)
     m_settings->setValue("model", model);
 }
 
+// Per-backend API settings
+QString ConfigManager::apiKey(const QString &backend) const
+{
+    return m_settings->value(QString("apiKeys/%1").arg(backend)).toString();
+}
+
+void ConfigManager::setApiKey(const QString &backend, const QString &key)
+{
+    m_settings->setValue(QString("apiKeys/%1").arg(backend), key);
+}
+
+QString ConfigManager::baseUrl(const QString &backend) const
+{
+    return m_settings->value(QString("baseUrls/%1").arg(backend)).toString();
+}
+
+void ConfigManager::setBaseUrl(const QString &backend, const QString &url)
+{
+    m_settings->setValue(QString("baseUrls/%1").arg(backend), url);
+}
+
+QString ConfigManager::model(const QString &backend) const
+{
+    return m_settings->value(QString("models/%1").arg(backend)).toString();
+}
+
+void ConfigManager::setModel(const QString &backend, const QString &model)
+{
+    m_settings->setValue(QString("models/%1").arg(backend), model);
+}
+
 QString ConfigManager::defaultExportFormat() const
 {
     return m_settings->value("exportFormat", "markdown").toString();
@@ -171,4 +202,14 @@ void ConfigManager::load()
 void ConfigManager::save()
 {
     m_settings->sync();
+}
+
+QVariant ConfigManager::value(const QString &key, const QVariant &defaultValue) const
+{
+    return m_settings->value(key, defaultValue);
+}
+
+void ConfigManager::setValue(const QString &key, const QVariant &value)
+{
+    m_settings->setValue(key, value);
 }

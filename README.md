@@ -61,7 +61,14 @@ cd PhotoTrick
 
 ### 4. 构建项目
 
-#### Windows (MinGW)
+#### Windows
+
+```cmd
+# 使用编译脚本
+build.bat
+```
+
+或手动编译：
 
 ```cmd
 # 配置
@@ -75,6 +82,13 @@ C:\Qt\6.8.3\mingw_64\bin\windeployqt.exe build\PhotoTrick.exe
 ```
 
 #### Linux
+
+```bash
+# 使用编译脚本
+./scripts/build.sh
+```
+
+或手动编译：
 
 ```bash
 # 配置
@@ -195,12 +209,14 @@ PhotoTrick/
 
 | 脚本 | 用途 |
 |------|------|
-| `setup_ocr_env.sh` | 自动安装 RapidOCR、Flask 等 OCR 依赖 |
-| `start_ocr_server.sh` | 启动本地 OCR 服务器（支持 start/stop/restart/status） |
-| `stop_ocr_server.sh` | 停止本地 OCR 服务器 |
-| `test_ocr_service.sh` | 测试 OCR 服务是否正常工作 |
-| `paddle_server.py` | PaddleOCR HTTP 服务主程序 |
-| `file_converter.py` | PDF/OFD/DOCX/XLSX 转图片服务 |
+| `build.bat` / `scripts/build.sh` | 编译项目，检查环境，部署依赖 |
+| `test.bat` | 完整测试流程（检查依赖、启动OCR、测试服务、启动应用） |
+| `scripts/setup_ocr_env.sh/.bat` | 自动安装 RapidOCR、Flask 等 OCR 依赖 |
+| `scripts/start_ocr_server.sh/.bat` | 启动本地 OCR 服务器（支持 start/stop/restart/status） |
+| `scripts/stop_ocr_server.sh` | 停止本地 OCR 服务器 |
+| `scripts/test_ocr_service.sh/.bat` | 测试 OCR 服务是否正常工作 |
+| `scripts/paddle_server.py` | PaddleOCR HTTP 服务主程序 |
+| `scripts/file_converter.py` | PDF/OFD/DOCX/XLSX 转图片服务 |
 
 ## 常见问题
 
