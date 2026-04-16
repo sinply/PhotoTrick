@@ -34,6 +34,160 @@ void debugLog(const QString &message)
         stream.flush();
     }
 }
+
+// Shared non-invoice document keywords
+// Used to detect documents that are NOT invoices (itineraries, tickets, etc.)
+const QStringList NON_INVOICE_KEYWORDS = {
+    // 登机牌/机票
+    QStringLiteral("登机牌"), QStringLiteral("BOARDING PASS"),
+    QStringLiteral("航班号"), QStringLiteral("FLIGHT NO"),
+    QStringLiteral("承运人"), QStringLiteral("CARRIER"),
+    QStringLiteral("起飞时间"), QStringLiteral("DEPTIME"),
+    QStringLiteral("到达时间"), QStringLiteral("ARRTIME"),
+    QStringLiteral("登机口"),  // GATE too generic
+    QStringLiteral("座位号"),  // SEAT too generic
+    QStringLiteral("舱位"),  // CLASS too generic
+    QStringLiteral("客票级别"), QStringLiteral("FARE BASIS"),
+    // 行程单/电子客票
+    QStringLiteral("行程单"), QStringLiteral("ITINERARY"),
+    QStringLiteral("电子客票"), QStringLiteral("E-TICKET"),
+    QStringLiteral("客票号码"), QStringLiteral("TICKET NO"),
+    QStringLiteral("印刷序号"), QStringLiteral("SERIAL NO"),
+    QStringLiteral("销售单位代号"), QStringLiteral("AGENT CODE"),
+    QStringLiteral("填开单位"), QStringLiteral("ISSUED BY"),
+    QStringLiteral("旅客姓名"), QStringLiteral("PASSENGER"),
+    QStringLiteral("始发站"),  // FROM too generic
+    QStringLiteral("目的站"),  // TO too generic
+    QStringLiteral("航线"), QStringLiteral("ROUTE"),
+    QStringLiteral("票价"), QStringLiteral("FARE"),
+    QStringLiteral("燃油附加费"), QStringLiteral("FUEL SURCHARGE"),
+    QStringLiteral("机场建设费"), QStringLiteral("AIRPORT TAX"),
+    QStringLiteral("民航发展基金"), QStringLiteral("CIVIL AVIATION"),
+    QStringLiteral("保险费"), QStringLiteral("INSURANCE"),
+    QStringLiteral("合计金额"), QStringLiteral("TOTAL FARE"),
+    QStringLiteral("电子客票号码"),
+    // 火车票
+    QStringLiteral("火车票"), QStringLiteral("TRAIN TICKET"),
+    QStringLiteral("车次"), QStringLiteral("TRAIN NO"),
+    QStringLiteral("车厢"), QStringLiteral("CAR NO"),
+    QStringLiteral("开往"),  // TO too generic
+    QStringLiteral("检票口"),  // GATE too generic
+    // 汽车票/出租车
+    QStringLiteral("车票"),  // TICKET too generic
+    QStringLiteral("出租车"), QStringLiteral("TAXI"),
+    QStringLiteral("网约车"), QStringLiteral("RIDE"),
+    // 其他
+    QStringLiteral("报销凭证"), QStringLiteral("保险单"),
+    QStringLiteral("审批"), QStringLiteral("出差审批"),
+    QStringLiteral("航班"),  // FLIGHT too generic
+    // 费用报告/报销单
+    QStringLiteral("费用报告"), QStringLiteral("EXPENSE REPORT"),
+    QStringLiteral("报销单"), QStringLiteral("EXPENSE CLAIM"),
+    QStringLiteral("费用清单"), QStringLiteral("EXPENSE SHEET"),
+    QStringLiteral("费用明细"), QStringLiteral("EXPENSE DETAIL"),
+    // 国际航线常见词
+    QStringLiteral("PASSENGER NAME"),
+    QStringLiteral("FLIGHT DATE"),
+    QStringLiteral("ISSUE DATE"),
+    QStringLiteral("NOT TRANSFERABLE"),
+    QStringLiteral("E-TICKET RECEIPT")
+};
+
+// Ride-hailing platform keywords for detecting ride-hailing itineraries
+const QStringList RIDE_HAILING_KEYWORDS = {
+    QStringLiteral("高德打车"), QStringLiteral("滴滴"), QStringLiteral("嘀嘀"),
+    QStringLiteral("网约车"), QStringLiteral("曹操出行"), QStringLiteral("神州专车"),
+    QStringLiteral("首汽约车"), QStringLiteral("T3出行"), QStringLiteral("美团打车"),
+    QStringLiteral("花小猪"), QStringLiteral("嘀嗒出行"), QStringLiteral("享道出行"),
+    QStringLiteral("如祺出行")
+};
+
+// Check if sellerName indicates a real airline company
+// Must be more specific than just "航空" to avoid false positives like "航空食品有限公司"
+bool isAirlineCompany(const QString &sellerName)
+{
+    // Must have "航空" AND end with airline company suffixes
+    if (sellerName.contains(QStringLiteral("航空"))) {
+        // Airline companies typically end with these suffixes
+        if (sellerName.endsWith(QStringLiteral("航空公司")) ||
+            sellerName.endsWith(QStringLiteral("航空股份有限公司")) ||
+            sellerName.endsWith(QStringLiteral("航空有限公司"))) {
+            return true;
+        }
+        // Check for specific airline names (without requiring suffix)
+        const QStringList knownAirlines = {
+            QStringLiteral("南方航空"), QStringLiteral("东方航空"), QStringLiteral("国际航空"),
+            QStringLiteral("厦门航空"), QStringLiteral("深圳航空"), QStringLiteral("山东航空"),
+            QStringLiteral("四川航空"), QStringLiteral("海南航空"), QStringLiteral("春秋航空"),
+            QStringLiteral("吉祥航空"), QStringLiteral("华夏航空"), QStringLiteral("天津航空"),
+            QStringLiteral("首都航空"), QStringLiteral("祥鹏航空"), QStringLiteral("西部航空"),
+            QStringLiteral("乌鲁木齐航空"), QStringLiteral("北部湾航空"), QStringLiteral("长安航空"),
+            QStringLiteral("金鹏航空"), QStringLiteral("福州航空"), QStringLiteral("桂林航空"),
+            QStringLiteral("多彩航空"), QStringLiteral("河北航空"), QStringLiteral("江西航空"),
+            QStringLiteral("青岛航空"), QStringLiteral("瑞丽航空"), QStringLiteral("东海航空"),
+            QStringLiteral("九元航空"), QStringLiteral("长龙航空"), QStringLiteral("昆明航空"),
+            QStringLiteral("西藏航空"), QStringLiteral("奥凯航空"), QStringLiteral("红土航空"),
+            QStringLiteral("AIR CHINA"), QStringLiteral("CHINA EASTERN"), QStringLiteral("CHINA SOUTHERN")
+        };
+        for (const QString &airline : knownAirlines) {
+            if (sellerName.contains(airline, Qt::CaseInsensitive)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Check if document is a ride-hailing itinerary
+bool isRideHailingItinerary(const QString &sellerName, const QString &rawText)
+{
+    // Check sellerName first
+    for (const QString &keyword : RIDE_HAILING_KEYWORDS) {
+        if (sellerName.contains(keyword, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    // Also check raw text as fallback
+    for (const QString &keyword : RIDE_HAILING_KEYWORDS) {
+        if (rawText.contains(keyword, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if document is an airline ticket/itinerary
+bool isAirlineTicketDoc(const QString &sellerName, const QString &rawText, const QJsonArray &items = QJsonArray())
+{
+    // Check sellerName for airline company
+    if (isAirlineCompany(sellerName)) {
+        return true;
+    }
+
+    // Check items for "机票款" description
+    for (const QJsonValue &item : items) {
+        if (item.isObject()) {
+            QString desc = item.toObject().value("description").toString();
+            if (desc.contains(QStringLiteral("机票款")) || desc.contains(QStringLiteral("机票"))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// Check for non-invoice document keywords in text
+bool containsNonInvoiceKeyword(const QString &text)
+{
+    for (const QString &keyword : NON_INVOICE_KEYWORDS) {
+        if (text.contains(keyword, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }
 
 namespace {
@@ -716,9 +870,15 @@ const QString InvoiceRecognizer::INVOICE_PROMPT = R"(
 2. 日期必须是YYYY-MM-DD格式
 3. 如果无法确定某字段，请填null
 4. invoiceCategory根据发票内容判断：交通(机票/火车票/出租车/加油/停车等)、住宿(酒店/宾馆等)、餐饮(餐厅/外卖等)、其他
+5. documentType字段用于判断文档类型：
+   - 如果是正规发票（增值税发票、电子发票等），填"invoice"
+   - 如果是行程单、登机牌、火车票，填"itinerary"
+   - 如果是费用报告、报销单、费用清单等非发票文档，填"expense_report"
+   - 如果是其他类型文档，填具体类型名称
 
 返回格式：
 {
+    "documentType": "文档类型（invoice/itinerary/expense_report/其他）",
     "invoiceType": "发票类型",
     "invoiceNumber": "发票号码",
     "date": "开票日期（YYYY-MM-DD）",
@@ -727,10 +887,10 @@ const QString InvoiceRecognizer::INVOICE_PROMPT = R"(
     "buyerTaxId": "购买方税号",
     "sellerName": "销售方名称",
     "sellerTaxId": "销售方税号",
-    "totalAmount": 价税合计金额（纯数字）, 
-    "amountWithoutTax": 不含税金额（纯数字）, 
-    "taxAmount": 税额（纯数字）, 
-    "taxRate": 税率（纯数字，如13表示13%）, 
+    "totalAmount": 价税合计金额（纯数字）,
+    "amountWithoutTax": 不含税金额（纯数字）,
+    "taxAmount": 税额（纯数字）,
+    "taxRate": 税率（纯数字，如13表示13%）,
     "departure": "出发地（交通类发票）",
     "destination": "目的地（交通类发票）",
     "passengerName": "乘客姓名",
@@ -978,67 +1138,16 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         // IMPORTANT: Must have invoice number to be a valid invoice
         // 行程单、登机牌、火车票等不是发票，不应混入
 
-        // First check: exclude non-invoice document types
-        // 行程单、登机牌、火车票等交通票据特征
-        QStringList nonInvoiceKeywords = {
-            // 登机牌/机票
-            QStringLiteral("登机牌"), QStringLiteral("BOARDING PASS"),
-            QStringLiteral("航班号"), QStringLiteral("FLIGHT NO"),
-            QStringLiteral("承运人"), QStringLiteral("CARRIER"),
-            QStringLiteral("起飞时间"), QStringLiteral("DEPTIME"),
-            QStringLiteral("到达时间"), QStringLiteral("ARRTIME"),
-            QStringLiteral("登机口"),  // GATE too generic
-            QStringLiteral("座位号"),  // SEAT too generic
-            QStringLiteral("舱位"),  // CLASS too generic
-            QStringLiteral("客票级别"), QStringLiteral("FARE BASIS"),
-            // 行程单/电子客票
-            QStringLiteral("行程单"), QStringLiteral("ITINERARY"),
-            QStringLiteral("电子客票"), QStringLiteral("E-TICKET"),
-            QStringLiteral("客票号码"), QStringLiteral("TICKET NO"),
-            QStringLiteral("票号"), QStringLiteral("TICKET NUMBER"),
-            QStringLiteral("印刷序号"), QStringLiteral("SERIAL NO"),
-            QStringLiteral("销售单位代号"), QStringLiteral("AGENT CODE"),
-            QStringLiteral("填开单位"), QStringLiteral("ISSUED BY"),
-            QStringLiteral("旅客姓名"), QStringLiteral("PASSENGER"),
-            QStringLiteral("始发站"),  // FROM too generic
-            QStringLiteral("目的站"),  // TO too generic
-            QStringLiteral("航线"), QStringLiteral("ROUTE"),
-            QStringLiteral("票价"), QStringLiteral("FARE"),
-            QStringLiteral("燃油附加费"), QStringLiteral("FUEL SURCHARGE"),
-            QStringLiteral("机场建设费"), QStringLiteral("AIRPORT TAX"),
-            QStringLiteral("民航发展基金"), QStringLiteral("CIVIL AVIATION"),
-            QStringLiteral("保险费"), QStringLiteral("INSURANCE"),
-            QStringLiteral("合计金额"), QStringLiteral("TOTAL FARE"),
-            QStringLiteral("电子客票号码"),
-            // 火车票
-            QStringLiteral("火车票"), QStringLiteral("TRAIN TICKET"),
-            QStringLiteral("车次"), QStringLiteral("TRAIN NO"),
-            QStringLiteral("车厢"), QStringLiteral("CAR NO"),
-            QStringLiteral("开往"),  // TO too generic
-            QStringLiteral("检票口"),  // GATE too generic
-            // 汽车票/出租车
-            QStringLiteral("车票"),  // TICKET too generic
-            QStringLiteral("出租车"), QStringLiteral("TAXI"),
-            QStringLiteral("网约车"), QStringLiteral("RIDE"),
-            // 其他
-            QStringLiteral("报销凭证"), QStringLiteral("保险单"),
-            QStringLiteral("审批"), QStringLiteral("出差审批"),
-            QStringLiteral("航班"),  // FLIGHT too generic
-            QStringLiteral("座位"),
-            // 国际航线常见词
-            QStringLiteral("PASSENGER NAME"),
-            QStringLiteral("FLIGHT DATE"),
-            QStringLiteral("ISSUE DATE"),
-            QStringLiteral("NOT TRANSFERABLE"),
-            QStringLiteral("E-TICKET RECEIPT")
-        };
-
-        for (const QString &keyword : nonInvoiceKeywords) {
-            if (rawText.contains(keyword, Qt::CaseInsensitive)) {
-                debugLog(QString("  Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
-                invoice.isValidInvoice = false;
-                invoice.invalidReason = QStringLiteral("非发票文档（检测到：%1）").arg(keyword);
-                return invoice;
+        // First check: exclude non-invoice document types using shared keywords
+        if (containsNonInvoiceKeyword(rawText)) {
+            // Find which keyword matched for reporting
+            for (const QString &keyword : NON_INVOICE_KEYWORDS) {
+                if (rawText.contains(keyword, Qt::CaseInsensitive)) {
+                    debugLog(QString("  Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
+                    invoice.isValidInvoice = false;
+                    invoice.invalidReason = QStringLiteral("非发票文档（检测到：%1）").arg(keyword);
+                    return invoice;
+                }
             }
         }
 
@@ -1194,6 +1303,26 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         return !val.isNull();
     };
 
+    // First check: documentType field from API response
+    // This is the most reliable way to detect non-invoice documents
+    if (hasValidValue("documentType")) {
+        QString docType = normalized.value("documentType").toString().trimmed().toLower();
+        debugLog(QString("documentType field: '%1'").arg(docType));
+
+        if (docType != "invoice" && docType != QStringLiteral("发票")) {
+            invoice.isValidInvoice = false;
+            if (docType == "itinerary" || docType == QStringLiteral("行程单")) {
+                invoice.invalidReason = QStringLiteral("非发票文档（检测到行程单/交通票据特征字段）");
+            } else if (docType == "expense_report" || docType == QStringLiteral("费用报告") || docType == QStringLiteral("报销单")) {
+                invoice.invalidReason = QStringLiteral("非发票文档（检测到费用报告/报销单）");
+            } else {
+                invoice.invalidReason = QStringLiteral("非发票文档（文档类型：%1）").arg(docType);
+            }
+            debugLog(QString("Non-invoice document detected by documentType field: %1").arg(docType));
+            return invoice;
+        }
+    }
+
     debugLog("Checking itinerary fields:");
     bool hasItineraryFields = hasValidValue("departure") ||
                               hasValidValue("destination") ||
@@ -1208,67 +1337,22 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     QString sellerName = hasValidValue("sellerName") ? normalized.value("sellerName").toString().trimmed() : QString();
     debugLog(QString("sellerName for check: '%1'").arg(sellerName));
 
-    // 打车平台行程单特征
-    QStringList rideHailingKeywords = {
-        QStringLiteral("高德打车"), QStringLiteral("滴滴"), QStringLiteral("嘀嘀"),
-        QStringLiteral("网约车"), QStringLiteral("曹操出行"), QStringLiteral("神州专车"),
-        QStringLiteral("首汽约车"), QStringLiteral("T3出行"), QStringLiteral("美团打车"),
-        QStringLiteral("花小猪"), QStringLiteral("嘀嗒出行"), QStringLiteral("享道出行"),
-        QStringLiteral("如祺出行")
-    };
-
-    bool isRideHailingItinerary = false;
-    for (const QString &keyword : rideHailingKeywords) {
-        if (sellerName.contains(keyword, Qt::CaseInsensitive)) {
-            debugLog(QString("Detected ride-hailing itinerary from sellerName: %1").arg(keyword));
-            isRideHailingItinerary = true;
-            break;
-        }
+    // 使用共享函数检测打车平台行程单
+    bool detectedRideHailing = isRideHailingItinerary(sellerName, rawText);
+    if (detectedRideHailing) {
+        debugLog("Detected ride-hailing itinerary");
     }
 
-    // 航空公司机票行程单特征
-    // 当有出发地、目的地、乘客姓名，且 sellerName 是航空公司时，判定为机票行程单
-    QStringList airlineKeywords = {
-        QStringLiteral("航空"), QStringLiteral("航空公司"),
-        QStringLiteral("南方航空"), QStringLiteral("东方航空"), QStringLiteral("国际航空"),
-        QStringLiteral("厦门航空"), QStringLiteral("深圳航空"), QStringLiteral("山东航空"),
-        QStringLiteral("四川航空"), QStringLiteral("海南航空"), QStringLiteral("春秋航空"),
-        QStringLiteral("吉祥航空"), QStringLiteral("华夏航空"), QStringLiteral("天津航空"),
-        QStringLiteral("首都航空"), QStringLiteral("祥鹏航空"), QStringLiteral("西部航空"),
-        QStringLiteral("乌鲁木齐航空"), QStringLiteral("北部湾航空"), QStringLiteral("长安航空"),
-        QStringLiteral("金鹏航空"), QStringLiteral("福州航空"), QStringLiteral("桂林航空"),
-        QStringLiteral("多彩航空"), QStringLiteral("河北航空"), QStringLiteral("江西航空"),
-        QStringLiteral("青岛航空"), QStringLiteral("瑞丽航空"), QStringLiteral("东海航空"),
-        QStringLiteral("九元航空"), QStringLiteral("长龙航空"), QStringLiteral("昆明航空"),
-        QStringLiteral("西藏航空"), QStringLiteral("奥凯航空"), QStringLiteral("红土航空"),
-        QStringLiteral("AIR CHINA"), QStringLiteral("CHINA EASTERN"), QStringLiteral("CHINA SOUTHERN")
-    };
-
-    bool isAirlineTicket = false;
-    // 检查是否是机票：有出发地+目的地+乘客姓名，且sellerName包含航空公司关键词
-    if (hasItineraryFields && !sellerName.isEmpty()) {
-        for (const QString &keyword : airlineKeywords) {
-            if (sellerName.contains(keyword, Qt::CaseInsensitive)) {
-                debugLog(QString("Detected airline ticket from sellerName: %1").arg(keyword));
-                isAirlineTicket = true;
-                break;
-            }
-        }
+    // 获取 items 数组用于机票检测
+    QJsonArray itemsArray;
+    if (normalized.contains("items") && normalized.value("items").isArray()) {
+        itemsArray = normalized.value("items").toArray();
     }
 
-    // 检查 items 中是否有 "机票款" 描述
-    if (!isAirlineTicket && normalized.contains("items") && normalized.value("items").isArray()) {
-        QJsonArray items = normalized.value("items").toArray();
-        for (const QJsonValue &item : items) {
-            if (item.isObject()) {
-                QString desc = item.toObject().value("description").toString();
-                if (desc.contains(QStringLiteral("机票款")) || desc.contains(QStringLiteral("机票"))) {
-                    debugLog(QString("Detected airline ticket from item description: %1").arg(desc));
-                    isAirlineTicket = true;
-                    break;
-                }
-            }
-        }
+    // 使用共享函数检测机票行程单
+    bool detectedAirlineTicket = isAirlineTicketDoc(sellerName, rawText, itemsArray);
+    if (detectedAirlineTicket) {
+        debugLog("Detected airline ticket/itinerary");
     }
 
     debugLog("Checking invoice fields:");
@@ -1277,93 +1361,67 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
                             hasValidValue("invoiceNo") ||
                             hasValidValue("invoiceType");
 
-    debugLog(QString("Result: hasItineraryFields=%1, hasInvoiceFields=%2, isRideHailingItinerary=%3, isAirlineTicket=%4")
+    debugLog(QString("Result: hasItineraryFields=%1, hasInvoiceFields=%2, isRideHailing=%3, isAirline=%4")
              .arg(hasItineraryFields ? "true" : "false")
              .arg(hasInvoiceFields ? "true" : "false")
-             .arg(isRideHailingItinerary ? "true" : "false")
-             .arg(isAirlineTicket ? "true" : "false"));
+             .arg(detectedRideHailing ? "true" : "false")
+             .arg(detectedAirlineTicket ? "true" : "false"));
 
     // 判定为非发票的条件：
     // 1. 存在行程单特征且缺少发票特征
     // 2. 打车平台行程单
     // 3. 航空公司机票行程单
-    if ((hasItineraryFields && !hasInvoiceFields) || isRideHailingItinerary || isAirlineTicket) {
+    if ((hasItineraryFields && !hasInvoiceFields) || detectedRideHailing || detectedAirlineTicket) {
         invoice.isValidInvoice = false;
-        if (isRideHailingItinerary) {
+        if (detectedRideHailing) {
             invoice.invalidReason = QStringLiteral("非发票文档（检测到打车平台行程单）");
-        } else if (isAirlineTicket) {
+        } else if (detectedAirlineTicket) {
             invoice.invalidReason = QStringLiteral("非发票文档（检测到机票行程单）");
         } else {
             invoice.invalidReason = QStringLiteral("非发票文档（检测到行程单/交通票据特征字段）");
         }
         debugLog(QString("Non-invoice document detected (itinerary=%1, rideHailing=%2, airline=%3), marking as invalid")
                  .arg(hasItineraryFields ? "true" : "false")
-                 .arg(isRideHailingItinerary ? "true" : "false")
-                 .arg(isAirlineTicket ? "true" : "false"));
+                 .arg(detectedRideHailing ? "true" : "false")
+                 .arg(detectedAirlineTicket ? "true" : "false"));
         return invoice;
     }
 
-    // Second check: exclude non-invoice document types by keyword in raw text
-    // 行程单、登机牌、火车票等交通票据特征
-    QStringList nonInvoiceKeywords = {
-        // 登机牌/机票
-        QStringLiteral("登机牌"), QStringLiteral("BOARDING PASS"),
-        QStringLiteral("航班号"), QStringLiteral("FLIGHT NO"),
-        QStringLiteral("承运人"), QStringLiteral("CARRIER"),
-        QStringLiteral("起飞时间"), QStringLiteral("DEPTIME"),
-        QStringLiteral("到达时间"), QStringLiteral("ARRTIME"),
-        QStringLiteral("登机口"),  // GATE too generic
-        QStringLiteral("座位号"),  // SEAT too generic
-        QStringLiteral("舱位"),  // CLASS too generic
-        QStringLiteral("客票级别"), QStringLiteral("FARE BASIS"),
-        // 行程单/电子客票
-        QStringLiteral("行程单"), QStringLiteral("ITINERARY"),
-        QStringLiteral("电子客票"), QStringLiteral("E-TICKET"),
-        QStringLiteral("客票号码"), QStringLiteral("TICKET NO"),
-        QStringLiteral("票号"), QStringLiteral("TICKET NUMBER"),
-        QStringLiteral("印刷序号"), QStringLiteral("SERIAL NO"),
-        QStringLiteral("销售单位代号"), QStringLiteral("AGENT CODE"),
-        QStringLiteral("填开单位"), QStringLiteral("ISSUED BY"),
-        QStringLiteral("旅客姓名"), QStringLiteral("PASSENGER"),
-        QStringLiteral("始发站"),  // FROM too generic
-        QStringLiteral("目的站"),  // TO too generic
-        QStringLiteral("航线"), QStringLiteral("ROUTE"),
-        QStringLiteral("票价"), QStringLiteral("FARE"),
-        QStringLiteral("燃油附加费"), QStringLiteral("FUEL SURCHARGE"),
-        QStringLiteral("机场建设费"), QStringLiteral("AIRPORT TAX"),
-        QStringLiteral("民航发展基金"), QStringLiteral("CIVIL AVIATION"),
-        QStringLiteral("保险费"), QStringLiteral("INSURANCE"),
-        QStringLiteral("合计金额"), QStringLiteral("TOTAL FARE"),
-        QStringLiteral("电子客票号码"),
-        // 火车票
-        QStringLiteral("火车票"), QStringLiteral("TRAIN TICKET"),
-        QStringLiteral("车次"), QStringLiteral("TRAIN NO"),
-        QStringLiteral("车厢"), QStringLiteral("CAR NO"),
-        QStringLiteral("开往"),  // TO too generic
-        QStringLiteral("检票口"),  // GATE too generic
-        // 汽车票/出租车
-        QStringLiteral("车票"),  // TICKET too generic
-        QStringLiteral("出租车"), QStringLiteral("TAXI"),
-        QStringLiteral("网约车"), QStringLiteral("RIDE"),
-        // 其他
-        QStringLiteral("报销凭证"), QStringLiteral("保险单"),
-        QStringLiteral("审批"), QStringLiteral("出差审批"),
-        QStringLiteral("航班"),  // FLIGHT too generic
-        QStringLiteral("座位"),
-        // 国际航线常见词
-        QStringLiteral("PASSENGER NAME"),
-        QStringLiteral("FLIGHT DATE"),
-        QStringLiteral("ISSUE DATE"),
-        QStringLiteral("NOT TRANSFERABLE"),
-        QStringLiteral("E-TICKET RECEIPT")
-    };
+    // Second check: exclude non-invoice document types by keyword in raw text using shared keywords
+    if (containsNonInvoiceKeyword(rawText)) {
+        // Find which keyword matched for reporting
+        for (const QString &keyword : NON_INVOICE_KEYWORDS) {
+            if (rawText.contains(keyword, Qt::CaseInsensitive)) {
+                invoice.isValidInvoice = false;
+                invoice.invalidReason = QStringLiteral("非发票文档（检测到关键词：%1）").arg(keyword);
+                debugLog(QString("Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
+                return invoice;
+            }
+        }
+    }
 
-    for (const QString &keyword : nonInvoiceKeywords) {
-        if (rawText.contains(keyword, Qt::CaseInsensitive)) {
-            invoice.isValidInvoice = false;
-            invoice.invalidReason = QStringLiteral("非发票文档（检测到关键词：%1）").arg(keyword);
-            debugLog(QString("Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
-            return invoice;
+    // Third check: For API OCR with structured data but no raw text,
+    // check for non-invoice keywords in structured field values
+    // This catches cases like expense reports where API "hallucinates" invoice structure
+    if (rawText.isEmpty() && hasStructuredData) {
+        // Collect all string values from the structured data to check
+        QStringList structuredTexts;
+        for (auto it = normalized.begin(); it != normalized.end(); ++it) {
+            if (it.value().isString()) {
+                structuredTexts << it.value().toString();
+            }
+        }
+        QString combinedText = structuredTexts.join(" ");
+
+        if (containsNonInvoiceKeyword(combinedText)) {
+            for (const QString &keyword : NON_INVOICE_KEYWORDS) {
+                if (combinedText.contains(keyword, Qt::CaseInsensitive)) {
+                    invoice.isValidInvoice = false;
+                    invoice.invalidReason = QStringLiteral("非发票文档（检测到关键词：%1）").arg(keyword);
+                    debugLog(QString("Non-invoice document detected in structured data (keyword: %1), marking as invalid").arg(keyword));
+                    return invoice;
+                }
+            }
         }
     }
 
