@@ -1,4 +1,5 @@
 #include "ClaudeClient.h"
+#include "../utils/OcrParser.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -6,54 +7,11 @@
 #include <QJsonArray>
 #include <QBuffer>
 
-namespace {
-QJsonDocument tryParseJson(QString text)
-{
-    text = text.trimmed();
-    if (text.startsWith("```")) {
-        int firstNewline = text.indexOf('\n');
-        if (firstNewline >= 0) {
-            text = text.mid(firstNewline + 1);
-        }
-        if (text.endsWith("```")) {
-            text.chop(3);
-        }
-        text = text.trimmed();
-    }
-
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
-    if (!doc.isNull()) {
-        return doc;
-    }
-
-    int firstBrace = text.indexOf('{');
-    int lastBrace = text.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-        doc = QJsonDocument::fromJson(text.mid(firstBrace, lastBrace - firstBrace + 1).toUtf8(), &err);
-        if (!doc.isNull()) {
-            return doc;
-        }
-    }
-
-    int firstBracket = text.indexOf('[');
-    int lastBracket = text.lastIndexOf(']');
-    if (firstBracket >= 0 && lastBracket > firstBracket) {
-        doc = QJsonDocument::fromJson(text.mid(firstBracket, lastBracket - firstBracket + 1).toUtf8(), &err);
-        if (!doc.isNull()) {
-            return doc;
-        }
-    }
-
-    return QJsonDocument();
-}
-}
-
 ClaudeClient::ClaudeClient(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
-    , m_baseUrl("https://api.deepseek.com")
-    , m_model("deepseek-chat")
+    , m_baseUrl("https://api.anthropic.com")
+    , m_model("claude-3-5-sonnet-20241022")
 {
 }
 
@@ -95,7 +53,13 @@ void ClaudeClient::recognize(const QImage &image, const QString &prompt)
         return;
     }
 
-    QString base64Image = encodeImageToBase64(image);
+    saveRequestContext(image, prompt);
+    sendRequest();
+}
+
+void ClaudeClient::sendRequest()
+{
+    QString base64Image = encodeImageToBase64(m_lastImage);
 
     // Build request body (Claude format)
     QJsonObject requestBody;
@@ -120,7 +84,7 @@ void ClaudeClient::recognize(const QImage &image, const QString &prompt)
     // Text content
     QJsonObject textContent;
     textContent["type"] = "text";
-    textContent["text"] = prompt;
+    textContent["text"] = m_lastPrompt;
     content.append(textContent);
 
     message["content"] = content;
@@ -135,6 +99,7 @@ void ClaudeClient::recognize(const QImage &image, const QString &prompt)
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("x-api-key", m_apiKey.toUtf8());
     request.setRawHeader("anthropic-version", "2023-06-01");
+    request.setTransferTimeout(m_timeout);
 
     QNetworkReply *reply = m_networkManager->post(
         request,
@@ -151,7 +116,11 @@ void ClaudeClient::handleResponse(QNetworkReply *reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
-        emit recognitionError(tr("API请求失败: %1").arg(reply->errorString()));
+        if (shouldRetry("ClaudeClient:")) {
+            sendRequest();
+        } else {
+            emit recognitionError(tr("API请求失败: %1").arg(reply->errorString()));
+        }
         return;
     }
 
@@ -182,7 +151,7 @@ void ClaudeClient::handleResponse(QNetworkReply *reply)
         }
 
         // Try to parse as JSON
-        QJsonDocument textDoc = tryParseJson(text);
+        QJsonDocument textDoc = OcrParser::tryParseJson(text);
         if (!textDoc.isNull()) {
             if (textDoc.isObject()) {
                 output = textDoc.object();

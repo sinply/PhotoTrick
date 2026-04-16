@@ -19,6 +19,33 @@ public:
     virtual void recognize(const QImage &image, const QString &prompt) = 0;
     virtual bool isReady() const = 0;
 
+    void setTimeout(int msec) { m_timeout = msec; }
+    void setMaxRetries(int retries) { m_maxRetries = retries; }
+
+protected:
+    void saveRequestContext(const QImage &image, const QString &prompt)
+    {
+        m_lastImage = image;
+        m_lastPrompt = prompt;
+        m_retryCount = 0;
+    }
+
+    bool shouldRetry(const QString &logPrefix)
+    {
+        if (m_retryCount < m_maxRetries) {
+            m_retryCount++;
+            qDebug() << logPrefix << "Retry" << m_retryCount << "of" << m_maxRetries;
+            return true;
+        }
+        return false;
+    }
+
+    int m_timeout = 60000;
+    int m_maxRetries = 1;
+    int m_retryCount = 0;
+    QImage m_lastImage;
+    QString m_lastPrompt;
+
 signals:
     void recognitionFinished(const QJsonObject &result);
     void recognitionError(const QString &error);

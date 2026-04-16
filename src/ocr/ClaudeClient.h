@@ -20,6 +20,7 @@ public:
 
 private:
     QString encodeImageToBase64(const QImage &image);
+    void sendRequest();
     void handleResponse(QNetworkReply *reply);
 
     QNetworkAccessManager *m_networkManager;

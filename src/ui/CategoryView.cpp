@@ -4,6 +4,7 @@
 
 CategoryView::CategoryView(QWidget *parent)
     : QWidget(parent)
+    , m_tabWidget(nullptr)
     , m_tableAll(nullptr)
     , m_tableTransportation(nullptr)
     , m_tableAccommodation(nullptr)
@@ -17,7 +18,8 @@ void CategoryView::setupUI()
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    // Create tables
+    m_tabWidget = new QTabWidget(this);
+
     auto createTable = [this]() -> QTableWidget* {
         QTableWidget *table = new QTableWidget(this);
         table->setColumnCount(8);
@@ -36,43 +38,59 @@ void CategoryView::setupUI()
     m_tableAccommodation = createTable();
     m_tableDining = createTable();
 
-    layout->addWidget(m_tableAll);
+    m_tabWidget->addTab(m_tableAll, tr("全部"));
+    m_tabWidget->addTab(m_tableTransportation, tr("交通"));
+    m_tabWidget->addTab(m_tableAccommodation, tr("住宿"));
+    m_tabWidget->addTab(m_tableDining, tr("餐饮"));
+
+    layout->addWidget(m_tabWidget);
 }
 
-void CategoryView::setCategoryData(Category category, const QList<QStringList> &data)
+void CategoryView::refreshTable(QTableWidget *table, const QList<QStringList> &data)
 {
-    QTableWidget *targetTable = nullptr;
-
-    switch (category) {
-    case All:
-        targetTable = m_tableAll;
-        break;
-    case Transportation:
-        targetTable = m_tableTransportation;
-        break;
-    case Accommodation:
-        targetTable = m_tableAccommodation;
-        break;
-    case Dining:
-        targetTable = m_tableDining;
-        break;
-    }
-
-    if (!targetTable) return;
-
-    targetTable->clearContents();
-    targetTable->setRowCount(data.size());
+    table->clearContents();
+    table->setRowCount(data.size());
 
     for (int row = 0; row < data.size(); ++row) {
         const QStringList &rowData = data[row];
-        for (int col = 0; col < rowData.size() && col < targetTable->columnCount(); ++col) {
-            targetTable->setItem(row, col, new QTableWidgetItem(rowData[col]));
+        for (int col = 0; col < rowData.size() && col < table->columnCount(); ++col) {
+            table->setItem(row, col, new QTableWidgetItem(rowData[col]));
         }
+    }
+}
+
+void CategoryView::addInvoiceRow(const QStringList &row, InvoiceData::Category category)
+{
+    // Always add to "All" tab
+    m_dataAll.append(row);
+    refreshTable(m_tableAll, m_dataAll);
+
+    // Add to specific category tab
+    switch (category) {
+    case InvoiceData::Transportation:
+        m_dataTransportation.append(row);
+        refreshTable(m_tableTransportation, m_dataTransportation);
+        break;
+    case InvoiceData::Accommodation:
+        m_dataAccommodation.append(row);
+        refreshTable(m_tableAccommodation, m_dataAccommodation);
+        break;
+    case InvoiceData::Dining:
+        m_dataDining.append(row);
+        refreshTable(m_tableDining, m_dataDining);
+        break;
+    default:
+        break;
     }
 }
 
 void CategoryView::clearAll()
 {
+    m_dataAll.clear();
+    m_dataTransportation.clear();
+    m_dataAccommodation.clear();
+    m_dataDining.clear();
+
     m_tableAll->clearContents();
     m_tableAll->setRowCount(0);
     m_tableTransportation->clearContents();

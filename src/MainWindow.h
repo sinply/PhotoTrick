@@ -9,6 +9,10 @@
 #include <QTabWidget>
 #include <QLabel>
 #include <QProgressBar>
+#include <QImage>
+#include "models/InvoiceData.h"
+#include "models/ItineraryData.h"
+#include "models/TableData.h"
 
 // Forward declarations
 class FileListView;
@@ -50,6 +54,11 @@ private slots:
     void onItineraryRecognized(const class ItineraryData &itinerary);
     void onProcessingError(const QString &error);
     void processNextFile();
+
+    // Export slots
+    void onExportMarkdown();
+    void onExportCsv();
+    void onExportJson();
 
 private:
     void setupMenuBar();
@@ -93,10 +102,22 @@ private:
     // Batch result accumulation
     QStringList m_resultHeaders;
     QList<QStringList> m_resultRows;
+    QList<InvoiceData> m_invoices;
+    QList<ItineraryData> m_itineraries;
+    QList<TableData> m_tables;
 
     // Non-invoice and skipped files tracking
     QMap<QString, QString> m_nonInvoiceFiles;  // file -> reason
     QMap<QString, QString> m_skippedFiles;     // file -> reason
+
+    // Multi-page PDF: extra pages queued for processing
+    struct ExtraPage {
+        QString sourceFile;
+        int pageNumber;
+        QImage image;
+    };
+    QList<ExtraPage> m_pendingExtraPages;
+    int m_currentPageNumber = 1;  // current page number (1-based) for multi-page docs
 
     // File converter for PDF/OFD/DOCX/XLSX
     FileConverter *m_fileConverter;
@@ -107,6 +128,8 @@ private:
     QString currentProcessingFileName() const;
     void writeBatchSummaryFile();
     void skipCurrentFile(const QString &reason);
+    void processImage(const QImage &image);
+    void advanceToNextFile();
  };
 
 #endif // MAINWINDOW_H

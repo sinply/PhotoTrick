@@ -21,10 +21,16 @@ QJsonObject ItineraryData::toJson() const
     obj["seatNumber"] = seatNumber;
     obj["price"] = price;
     obj["taxAmount"] = taxAmount;
+    obj["fuelSurcharge"] = fuelSurcharge;
+    obj["airportTax"] = airportTax;
+    obj["insurance"] = insurance;
+    obj["totalAmount"] = totalAmount;
     obj["currency"] = currency;
     obj["relatedInvoiceId"] = relatedInvoiceId;
     obj["sourceFile"] = sourceFile;
     obj["confidence"] = confidence;
+    obj["isValidItinerary"] = isValidItinerary;
+    obj["invalidReason"] = invalidReason;
 
     return obj;
 }
@@ -50,10 +56,16 @@ ItineraryData ItineraryData::fromJson(const QJsonObject &json)
     data.seatNumber = json["seatNumber"].toString();
     data.price = json["price"].toDouble();
     data.taxAmount = json["taxAmount"].toDouble();
+    data.fuelSurcharge = json["fuelSurcharge"].toDouble();
+    data.airportTax = json["airportTax"].toDouble();
+    data.insurance = json["insurance"].toDouble();
+    data.totalAmount = json["totalAmount"].toDouble();
     data.currency = json["currency"].toString("CNY");
     data.relatedInvoiceId = json["relatedInvoiceId"].toString();
     data.sourceFile = json["sourceFile"].toString();
     data.confidence = json["confidence"].toDouble();
+    data.isValidItinerary = json["isValidItinerary"].toBool();
+    data.invalidReason = json["invalidReason"].toString();
 
     return data;
 }
@@ -78,4 +90,32 @@ ItineraryData::Type ItineraryData::typeFromString(const QString &str)
         return Bus;
     }
     return Other;
+}
+
+void ItineraryData::validate()
+{
+    // A valid itinerary should have at least some core data
+    if (price <= 0.0 && flightTrainNo.trimmed().isEmpty()
+        && departure.trimmed().isEmpty() && destination.trimmed().isEmpty()) {
+        isValidItinerary = false;
+        invalidReason = QStringLiteral("缺少核心信息（票价、航班/车次、路线）");
+        return;
+    }
+
+    // Check for non-itinerary keywords that indicate misclassification
+    static const QStringList nonItineraryKeywords = {
+        QStringLiteral("发票"), QStringLiteral("增值税"),
+        QStringLiteral("收据"), QStringLiteral("报销单")
+    };
+    // Only flag if there are no itinerary-specific indicators at all
+    bool hasItineraryHint = type != Other || !flightTrainNo.trimmed().isEmpty()
+        || departureTime.isValid() || arrivalTime.isValid();
+    if (!hasItineraryHint) {
+        isValidItinerary = false;
+        invalidReason = QStringLiteral("未识别出行程单特征");
+        return;
+    }
+
+    isValidItinerary = true;
+    invalidReason.clear();
 }

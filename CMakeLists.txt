@@ -50,6 +50,7 @@ set(MODEL_SOURCES
     src/models/TableData.h
     src/models/TableData.cpp
     src/models/ExportResult.h
+    src/models/ExportResult.cpp
 )
 
 # Processor sources
@@ -60,6 +61,12 @@ set(PROCESSOR_SOURCES
     src/processors/InvoiceRecognizer.h
     src/processors/ItineraryRecognizer.cpp
     src/processors/ItineraryRecognizer.h
+)
+
+# Utility sources
+set(UTILITY_SOURCES
+    src/utils/OcrParser.cpp
+    src/utils/OcrParser.h
 )
 
 # Classifier sources
@@ -113,6 +120,7 @@ qt_add_executable(PhotoTrick WIN32
     ${MODEL_SOURCES}
     ${PROCESSOR_SOURCES}
     ${CLASSIFIER_SOURCES}
+    ${UTILITY_SOURCES}
     ${EXPORTER_SOURCES}
     ${OCR_SOURCES}
     ${UI_SOURCES}

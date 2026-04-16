@@ -34,6 +34,10 @@ struct ItineraryData {
     // Price
     double price = 0.0;         // 票价
     double taxAmount = 0.0;     // 税额
+    double fuelSurcharge = 0.0; // 燃油附加费
+    double airportTax = 0.0;    // 机建费
+    double insurance = 0.0;     // 保险费
+    double totalAmount = 0.0;   // 总金额
     QString currency = "CNY";
 
     // Relations
@@ -41,6 +45,10 @@ struct ItineraryData {
 
     // Source
     QString sourceFile;
+
+    // Validation
+    bool isValidItinerary = false;
+    QString invalidReason;
 
     // Confidence
     double confidence = 0.0;
@@ -52,6 +60,7 @@ struct ItineraryData {
     // Helper
     QString typeToString() const;
     static Type typeFromString(const QString &str);
+    void validate();
 };
 
 #endif // ITINERARYDATA_H

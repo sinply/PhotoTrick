@@ -1,53 +1,11 @@
 #include "OpenAIClient.h"
+#include "../utils/OcrParser.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QBuffer>
-
-namespace {
-QJsonDocument tryParseJson(QString text)
-{
-    text = text.trimmed();
-    if (text.startsWith("```")) {
-        int firstNewline = text.indexOf('\n');
-        if (firstNewline >= 0) {
-            text = text.mid(firstNewline + 1);
-        }
-        if (text.endsWith("```")) {
-            text.chop(3);
-        }
-        text = text.trimmed();
-    }
-
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
-    if (!doc.isNull()) {
-        return doc;
-    }
-
-    int firstBrace = text.indexOf('{');
-    int lastBrace = text.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-        doc = QJsonDocument::fromJson(text.mid(firstBrace, lastBrace - firstBrace + 1).toUtf8(), &err);
-        if (!doc.isNull()) {
-            return doc;
-        }
-    }
-
-    int firstBracket = text.indexOf('[');
-    int lastBracket = text.lastIndexOf(']');
-    if (firstBracket >= 0 && lastBracket > firstBracket) {
-        doc = QJsonDocument::fromJson(text.mid(firstBracket, lastBracket - firstBracket + 1).toUtf8(), &err);
-        if (!doc.isNull()) {
-            return doc;
-        }
-    }
-
-    return QJsonDocument();
-}
-}
 
 OpenAIClient::OpenAIClient(QObject *parent)
     : OcrInterface(parent)
@@ -95,7 +53,13 @@ void OpenAIClient::recognize(const QImage &image, const QString &prompt)
         return;
     }
 
-    QString base64Image = encodeImageToBase64(image);
+    saveRequestContext(image, prompt);
+    sendRequest();
+}
+
+void OpenAIClient::sendRequest()
+{
+    QString base64Image = encodeImageToBase64(m_lastImage);
 
     // Build request body (OpenAI format)
     QJsonObject requestBody;
@@ -120,7 +84,7 @@ void OpenAIClient::recognize(const QImage &image, const QString &prompt)
     // Text content
     QJsonObject textContent;
     textContent["type"] = "text";
-    textContent["text"] = prompt;
+    textContent["text"] = m_lastPrompt;
     content.append(textContent);
 
     userMessage["content"] = content;
@@ -133,6 +97,7 @@ void OpenAIClient::recognize(const QImage &image, const QString &prompt)
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(m_apiKey).toUtf8());
+    request.setTransferTimeout(m_timeout);
 
     QNetworkReply *reply = m_networkManager->post(
         request,
@@ -149,7 +114,11 @@ void OpenAIClient::handleResponse(QNetworkReply *reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
-        emit recognitionError(tr("API请求失败: %1").arg(reply->errorString()));
+        if (shouldRetry("OpenAIClient:")) {
+            sendRequest();
+        } else {
+            emit recognitionError(tr("API请求失败: %1").arg(reply->errorString()));
+        }
         return;
     }
 
@@ -176,7 +145,7 @@ void OpenAIClient::handleResponse(QNetworkReply *reply)
             QString text = choices[0].toObject()["message"].toObject()["content"].toString();
 
             // Try to parse as JSON
-            QJsonDocument textDoc = tryParseJson(text);
+            QJsonDocument textDoc = OcrParser::tryParseJson(text);
             if (!textDoc.isNull()) {
                 if (textDoc.isObject()) {
                     output = textDoc.object();

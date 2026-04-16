@@ -1,6 +1,7 @@
 #include "InvoiceRecognizer.h"
 #include "../core/OcrManager.h"
 #include "../classifiers/InvoiceClassifier.h"
+#include "../utils/OcrParser.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -190,449 +191,7 @@ bool containsNonInvoiceKeyword(const QString &text)
 
 }
 
-namespace {
-QJsonObject parseJsonObjectFromText(QString text)
-{
-    text = text.trimmed();
-    if (text.startsWith("```")) {
-        int firstNewline = text.indexOf('\n');
-        if (firstNewline >= 0) {
-            text = text.mid(firstNewline + 1);
-        }
-        if (text.endsWith("```")) {
-            text.chop(3);
-        }
-        text = text.trimmed();
-    }
-
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8(), &err);
-    if (!doc.isNull() && doc.isObject()) {
-        return doc.object();
-    }
-
-    const int objStart = text.indexOf('{');
-    const int objEnd = text.lastIndexOf('}');
-    if (objStart >= 0 && objEnd > objStart) {
-        const QString jsonPart = text.mid(objStart, objEnd - objStart + 1);
-        doc = QJsonDocument::fromJson(jsonPart.toUtf8(), &err);
-        if (!doc.isNull() && doc.isObject()) {
-            return doc.object();
-        }
-    }
-    return QJsonObject();
-}
-
-QString normalizeKey(QString key)
-{
-    key = key.trimmed().toLower();
-    key.remove(QRegularExpression(QStringLiteral(R"([\s_\-:：()（）\[\]【】])")));
-    return key;
-}
-
-bool isMeaningfulString(const QString &value)
-{
-    const QString trimmed = value.trimmed();
-    if (trimmed.isEmpty()) {
-        return false;
-    }
-    return trimmed.compare(QStringLiteral("null"), Qt::CaseInsensitive) != 0
-        && trimmed.compare(QStringLiteral("none"), Qt::CaseInsensitive) != 0
-        && trimmed != QStringLiteral("-")
-        && trimmed != QStringLiteral("--");
-}
-
-QString firstNonEmpty(const QJsonObject &json, const QStringList &keys)
-{
-    for (const QString &key : keys) {
-        const QString value = json.value(key).toString().trimmed();
-        if (isMeaningfulString(value)) {
-            return value;
-        }
-    }
-    return QString();
-}
-
-QJsonValue findValueByKeysDeep(const QJsonValue &root, const QStringList &keys)
-{
-    const QStringList normalizedTargets = [&keys]() {
-        QStringList result;
-        for (const QString &k : keys) {
-            const QString nk = normalizeKey(k);
-            if (!nk.isEmpty()) {
-                result.append(nk);
-            }
-        }
-        return result;
-    }();
-
-    // First pass: exact match only
-    std::function<QJsonValue(const QJsonValue &, bool)> walk = [&](const QJsonValue &node, bool exactOnly) -> QJsonValue {
-        if (node.isObject()) {
-            const QJsonObject obj = node.toObject();
-
-            // First check for exact matches
-            for (auto it = obj.begin(); it != obj.end(); ++it) {
-                const QString keyNorm = normalizeKey(it.key());
-                for (const QString &target : normalizedTargets) {
-                    if (keyNorm == target) {
-                        if (it.value().isDouble()) {
-                            return it.value();
-                        }
-                        if (it.value().isString() && isMeaningfulString(it.value().toString())) {
-                            return it.value();
-                        }
-                    }
-                }
-            }
-
-            // If no exact match and not exact-only, try substring match
-            if (!exactOnly) {
-                for (auto it = obj.begin(); it != obj.end(); ++it) {
-                    const QString keyNorm = normalizeKey(it.key());
-                    bool match = false;
-                    for (const QString &target : normalizedTargets) {
-                        // Only allow longer target to contain keyNorm (e.g., "amount" matches "totalAmount")
-                        // but not the other way around (e.g., "rate" should not match "taxRate")
-                        if (keyNorm.length() >= target.length() && keyNorm.contains(target)) {
-                            match = true;
-                            break;
-                        }
-                    }
-
-                    if (match) {
-                        if (it.value().isDouble()) {
-                            return it.value();
-                        }
-                        if (it.value().isString() && isMeaningfulString(it.value().toString())) {
-                            return it.value();
-                        }
-                    }
-                }
-            }
-
-            // Recurse into nested objects/arrays
-            for (auto it = obj.begin(); it != obj.end(); ++it) {
-                if (it.value().isObject() || it.value().isArray()) {
-                    QJsonValue nested = walk(it.value(), exactOnly);
-                    if (!nested.isUndefined()) {
-                        return nested;
-                    }
-                }
-            }
-        } else if (node.isArray()) {
-            const QJsonArray array = node.toArray();
-            for (const QJsonValue &item : array) {
-                if (item.isObject() || item.isArray()) {
-                    QJsonValue nested = walk(item, exactOnly);
-                    if (!nested.isUndefined()) {
-                        return nested;
-                    }
-                }
-            }
-        }
-        return QJsonValue(QJsonValue::Undefined);
-    };
-
-    // Try exact match first
-    QJsonValue result = walk(root, true);
-    if (!result.isUndefined()) {
-        return result;
-    }
-
-    // Fall back to substring match
-    return walk(root, false);
-}
-
-QString extractRawText(const QJsonObject &json)
-{
-    QStringList chunks;
-
-    auto appendFromKey = [&](const QString &key) {
-        if (!json.contains(key)) {
-            return;
-        }
-        const QJsonValue val = json.value(key);
-        if (val.isString()) {
-            const QString text = val.toString().trimmed();
-            if (!text.isEmpty()) {
-                chunks << text;
-            }
-        } else if (val.isArray()) {
-            const QJsonArray arr = val.toArray();
-            for (const QJsonValue &v : arr) {
-                if (v.isObject()) {
-                    const QJsonObject obj = v.toObject();
-                    const QString t = obj.value(QStringLiteral("text")).toString().trimmed();
-                    if (!t.isEmpty()) {
-                        chunks << t;
-                    }
-                } else if (v.isString()) {
-                    const QString t = v.toString().trimmed();
-                    if (!t.isEmpty()) {
-                        chunks << t;
-                    }
-                }
-            }
-        }
-    };
-
-    appendFromKey(QStringLiteral("text"));
-    appendFromKey(QStringLiteral("raw_result"));
-    appendFromKey(QStringLiteral("rawText"));
-    appendFromKey(QStringLiteral("content"));
-    appendFromKey(QStringLiteral("lines"));
-    appendFromKey(QStringLiteral("boxes"));
-
-    if (chunks.isEmpty() && json.contains(QStringLiteral("data")) && json.value(QStringLiteral("data")).isObject()) {
-        chunks << extractRawText(json.value(QStringLiteral("data")).toObject());
-    }
-
-    return chunks.join('\n').trimmed();
-}
-
-struct AmountCandidate {
-    double value = 0.0;
-    int score = 0;
-    QString context;
-};
-
-QList<double> extractNumbers(const QString &text)
-{
-    QList<double> numbers;
-    if (text.isEmpty()) {
-        return numbers;
-    }
-
-    QRegularExpression re(QStringLiteral(R"([-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[-+]?\d+(?:\.\d+)?)"));
-    auto it = re.globalMatch(text);
-    while (it.hasNext()) {
-        const QString token = it.next().captured(0);
-        bool ok = false;
-        const double value = QString(token).remove(',').toDouble(&ok);
-        if (ok) {
-            numbers.append(value);
-        }
-    }
-    return numbers;
-}
-
-// Candidate scoring for amount extraction - avoids picking tax rate/invoice number
-double extractLabeledAmount(const QString &rawText, const QStringList &positiveLabels, const QStringList &negativeLabels = {})
-{
-    if (rawText.isEmpty() || positiveLabels.isEmpty()) {
-        return 0.0;
-    }
-
-    debugLog(QString("extractLabeledAmount called with positive labels: %1").arg(positiveLabels.join(", ")));
-
-    const QStringList lines = rawText.split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
-    QList<AmountCandidate> candidates;
-
-    // Negative keywords that indicate non-amount numbers
-    const QStringList defaultNegative = {
-        QStringLiteral("税率"), QStringLiteral("%"), QStringLiteral("百分比"),
-        QStringLiteral("编号"), QStringLiteral("代码"), QStringLiteral("号码"),
-        QStringLiteral("纳税人识别号"), QStringLiteral("统一社会信用代码"),
-        QStringLiteral("身份证"), QStringLiteral("数量"), QStringLiteral("单价"), QStringLiteral("件"),
-        QStringLiteral("序号"), QStringLiteral("电话"), QStringLiteral("手机")
-    };
-    const QStringList &negLabels = negativeLabels.isEmpty() ? defaultNegative : negativeLabels;
-
-    // Number regex for extracting amounts
-    QRegularExpression numRe(QStringLiteral(R"(([￥¥$]\s*)?(\d+(?:,\d{3})*(?:\.\d+)?)(?!\.?\d))"));
-    if (!numRe.isValid()) {
-        debugLog(QString("  Regex error: %1").arg(numRe.errorString()));
-    }
-
-    // Helper lambda to extract numbers from a line
-    auto extractNumbersFromLine = [&](const QString &line, int baseScore, const QString &contextLabel) -> QList<AmountCandidate> {
-        QList<AmountCandidate> lineCandidates;
-        QRegularExpressionMatchIterator it = numRe.globalMatch(line);
-        int matchCount = 0;
-        while (it.hasNext()) {
-            QRegularExpressionMatch match = it.next();
-            matchCount++;
-            debugLog(QString("  Regex match #%1: captured(0)='%2', captured(1)='%3', captured(2)='%4'")
-                .arg(matchCount)
-                .arg(match.captured(0))
-                .arg(match.captured(1))
-                .arg(match.captured(2)));
-
-            QString numStr = match.captured(2);
-            bool ok = false;
-            const double value = numStr.remove(',').toDouble(&ok);
-            if (!ok || value <= 0) {
-                continue;
-            }
-
-            AmountCandidate candidate;
-            candidate.value = value;
-            candidate.context = line;
-            candidate.score = baseScore;
-
-            // Check if number is near currency symbol or keywords
-            const int numPos = match.capturedStart(2);
-            const QString beforeNum = line.left(numPos);
-            const QString afterNum = line.mid(numPos + numStr.length());
-
-            // Positive: currency symbols nearby
-            if (beforeNum.contains(QChar(0xFFE5)) || beforeNum.contains(QChar(0x00A5)) ||
-                beforeNum.contains('$') || beforeNum.contains(QStringLiteral("¥")) ||
-                beforeNum.contains(QStringLiteral("元"))) {
-                candidate.score += 15;
-            }
-            if (afterNum.contains(QChar(0xFFE5)) || afterNum.contains(QChar(0x00A5)) ||
-                afterNum.contains(QStringLiteral("元"))) {
-                candidate.score += 10;
-            }
-
-            // Negative: percent sign nearby (tax rate)
-            if (beforeNum.contains('%') || afterNum.contains('%') ||
-                beforeNum.contains(QStringLiteral("％")) || afterNum.contains(QStringLiteral("％"))) {
-                candidate.score -= 20;
-            }
-
-            // Prefer larger amounts (more likely to be totals)
-            if (value >= 100) {
-                candidate.score += 3;
-            }
-            if (value >= 1000) {
-                candidate.score += 2;
-            }
-
-            // Skip very small numbers (likely quantities or percentages)
-            if (value < 1 && value > 0) {
-                candidate.score -= 10;
-            }
-
-            debugLog(QString("  Candidate: value=%1, score=%2, line: %3")
-                .arg(value).arg(candidate.score).arg(line));
-
-            lineCandidates.append(candidate);
-        }
-        return lineCandidates;
-    };
-
-    for (int lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
-        const QString line = lines[lineIdx].trimmed();
-        if (line.isEmpty()) {
-            continue;
-        }
-
-        // Check for positive labels
-        int baseScore = 0;
-        QStringList matchedLabels;
-        for (const QString &label : positiveLabels) {
-            if (line.contains(label, Qt::CaseInsensitive)) {
-                // Exact match at line start gets higher score
-                if (line.startsWith(label, Qt::CaseInsensitive)) {
-                    baseScore += 10;
-                    matchedLabels << QString("%1(start)").arg(label);
-                } else {
-                    baseScore += 5;
-                    matchedLabels << label;
-                }
-                // "小写" and "价税合计" are strong indicators of total amount
-                if (label == QStringLiteral("小写") || label == QStringLiteral("价税合计")) {
-                    baseScore += 5;
-                }
-            }
-        }
-
-        if (baseScore == 0) {
-            continue;
-        }
-
-        debugLog(QString("  Found label match on line: '%1', score=%2, labels=%3")
-            .arg(line).arg(baseScore).arg(matchedLabels.join(",")));
-
-        // Check for negative labels (reduce score)
-        QStringList matchedNegLabels;
-        for (const QString &negLabel : negLabels) {
-            if (line.contains(negLabel, Qt::CaseInsensitive)) {
-                baseScore -= 8;
-                matchedNegLabels << negLabel;
-            }
-        }
-
-        // Extract numbers from current line
-        QList<AmountCandidate> lineCandidates = extractNumbersFromLine(line, baseScore, line);
-        candidates.append(lineCandidates);
-
-        // If no numbers found on current line, check adjacent lines (OCR table structure)
-        if (lineCandidates.isEmpty()) {
-            debugLog(QString("  No numbers on label line, checking adjacent lines..."));
-
-            // Check previous 2 lines
-            for (int offset = 1; offset <= 2; ++offset) {
-                if (lineIdx - offset >= 0) {
-                    const QString prevLine = lines[lineIdx - offset].trimmed();
-                    if (!prevLine.isEmpty()) {
-                        // Reduce score for adjacent lines
-                        int adjScore = baseScore - offset * 2;
-                        debugLog(QString("  Checking previous line %1: '%2'").arg(-offset).arg(prevLine));
-                        QList<AmountCandidate> adjCandidates = extractNumbersFromLine(prevLine, adjScore, line);
-                        candidates.append(adjCandidates);
-                    }
-                }
-            }
-
-            // Check next 2 lines
-            for (int offset = 1; offset <= 2; ++offset) {
-                if (lineIdx + offset < lines.size()) {
-                    const QString nextLine = lines[lineIdx + offset].trimmed();
-                    if (!nextLine.isEmpty()) {
-                        int adjScore = baseScore - offset * 2;
-                        debugLog(QString("  Checking next line %1: '%2'").arg(offset).arg(nextLine));
-                        QList<AmountCandidate> adjCandidates = extractNumbersFromLine(nextLine, adjScore, line);
-                        candidates.append(adjCandidates);
-                    }
-                }
-            }
-        }
-    }
-
-    // Return highest scoring candidate
-    if (candidates.isEmpty()) {
-        debugLog("  No candidates found!");
-        return 0.0;
-    }
-
-    std::sort(candidates.begin(), candidates.end(), [](const AmountCandidate &a, const AmountCandidate &b) {
-        if (a.score != b.score) {
-            return a.score > b.score;
-        }
-        // When scores are equal, prefer larger values for total amounts
-        return a.value > b.value;
-    });
-
-    debugLog(QString("  Top 3 candidates:"));
-    for (int i = 0; i < qMin(3, candidates.size()); ++i) {
-        debugLog(QString("    #%1: value=%2, score=%3, context=%4")
-            .arg(i+1).arg(candidates[i].value).arg(candidates[i].score).arg(candidates[i].context));
-    }
-
-    debugLog(QString("  SELECTED: %1 (score %2)").arg(candidates.first().value).arg(candidates.first().score));
-
-    return candidates.first().value;
-}
-
-QJsonObject choosePrimaryObject(const QJsonObject &json)
-{
-    if (json.contains(QStringLiteral("data")) && json.value(QStringLiteral("data")).isObject()) {
-        return json.value(QStringLiteral("data")).toObject();
-    }
-    if (json.contains(QStringLiteral("invoice")) && json.value(QStringLiteral("invoice")).isObject()) {
-        return json.value(QStringLiteral("invoice")).toObject();
-    }
-    if (json.contains(QStringLiteral("result")) && json.value(QStringLiteral("result")).isObject()) {
-        return json.value(QStringLiteral("result")).toObject();
-    }
-    return json;
-}
-
-double extractTaxRateFromText(const QString &rawText)
+static double extractTaxRateFromText(const QString &rawText)
 {
     if (rawText.isEmpty()) return 0.0;
 
@@ -860,7 +419,6 @@ void reconcileAmounts(InvoiceData &invoice)
         invoice.taxRate = 0.0;
     }
 }
-}
 
 const QString InvoiceRecognizer::INVOICE_PROMPT = R"(
 请仔细分析这张发票图片，提取以下信息并以JSON格式返回。
@@ -980,14 +538,14 @@ void InvoiceRecognizer::onOcrError(const QString &error)
 InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
 {
     InvoiceData invoice;
-    const QString rawText = extractRawText(json);
+    const QString rawText = OcrParser::extractRawText(json);
 
     qDebug() << "InvoiceRecognizer: ===== PARSING START =====";
     qDebug() << "InvoiceRecognizer: Input JSON keys:" << json.keys();
     qDebug() << "InvoiceRecognizer: Raw OCR text length:" << rawText.length();
     qDebug() << "InvoiceRecognizer: Raw OCR text preview:" << rawText.left(500);
 
-    QJsonObject normalized = choosePrimaryObject(json);
+    QJsonObject normalized = OcrParser::choosePrimaryObject(json);
     qDebug() << "InvoiceRecognizer: Normalized JSON keys:" << normalized.keys();
     debugLog(QString("Normalized JSON keys: %1").arg(normalized.keys().join(", ")));
     debugLog(QString("Full normalized JSON: %1").arg(QJsonDocument(normalized).toJson(QJsonDocument::Compact).left(2000)));
@@ -997,7 +555,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         QString textContent = normalized["text"].toString();
         debugLog(QString("Found 'text' field, content preview: %1").arg(textContent.left(200)));
 
-        QJsonObject parsed = parseJsonObjectFromText(textContent);
+        QJsonObject parsed = OcrParser::parseJsonObjectFromText(textContent);
         if (!parsed.isEmpty()) {
             normalized = parsed;
             qDebug() << "InvoiceRecognizer: Parsed JSON from text field, keys:" << normalized.keys();
@@ -1032,14 +590,14 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     }
 
     auto findText = [&](const QStringList &keys) -> QString {
-        QString value = firstNonEmpty(normalized, keys);
+        QString value = OcrParser::firstNonEmpty(normalized, keys);
         if (!value.isEmpty()) {
             return value;
         }
-        QJsonValue deepValue = findValueByKeysDeep(normalizedValue, keys);
+        QJsonValue deepValue = OcrParser::findValueByKeysDeep(normalizedValue, keys);
         if (deepValue.isString()) {
             const QString text = deepValue.toString().trimmed();
-            if (isMeaningfulString(text)) {
+            if (OcrParser::isMeaningfulString(text)) {
                 return text;
             }
         }
@@ -1047,7 +605,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     };
 
     auto findNumber = [&](const QStringList &keys) -> double {
-        double value = parseAmount(findValueByKeysDeep(normalizedValue, keys));
+        double value = parseAmount(OcrParser::findValueByKeysDeep(normalizedValue, keys));
         if (value > 0.0) {
             return value;
         }
@@ -1089,7 +647,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
 
         // Extract total amount with candidate scoring
         debugLog("--- Extracting TOTAL AMOUNT ---");
-        invoice.totalAmount = extractLabeledAmount(rawText, {
+        invoice.totalAmount = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("价税合计"), QStringLiteral("合计"), QStringLiteral("总计"),
             QStringLiteral("应付"), QStringLiteral("实付"), QStringLiteral("小写"),
             QStringLiteral("金额"), QStringLiteral("人民币")
@@ -1100,7 +658,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         debugLog("--- Extracting TAX AMOUNT ---");
         invoice.taxAmount = extractTaxAmountFromTable(rawText);
         if (invoice.taxAmount <= 0) {
-            invoice.taxAmount = extractLabeledAmount(rawText, {
+            invoice.taxAmount = OcrParser::extractLabeledAmount(rawText, {
                 QStringLiteral("税额"), QStringLiteral("税金")
             });
         }
@@ -1110,7 +668,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         debugLog("--- Extracting AMOUNT WITHOUT TAX ---");
         invoice.amountWithoutTax = extractAmountWithoutTaxFromTable(rawText);
         if (invoice.amountWithoutTax <= 0) {
-            invoice.amountWithoutTax = extractLabeledAmount(rawText, {
+            invoice.amountWithoutTax = OcrParser::extractLabeledAmount(rawText, {
                 QStringLiteral("不含税"), QStringLiteral("金额合计"), QStringLiteral("净额")
             });
         }
@@ -1451,7 +1009,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         "价税合计", "合计", "总金额", "金额", "小写"
     });
     if (invoice.totalAmount == 0.0) {
-        invoice.totalAmount = extractLabeledAmount(rawText, {
+        invoice.totalAmount = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("价税合计"), QStringLiteral("合计"), QStringLiteral("总计"),
             QStringLiteral("应付"), QStringLiteral("实付"), QStringLiteral("小写"), QStringLiteral("金额")
         });
@@ -1462,14 +1020,14 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         "amountWithoutTax", "netAmount", "subtotal", "不含税金额", "金额合计"
     });
     if (invoice.amountWithoutTax == 0.0) {
-        invoice.amountWithoutTax = extractLabeledAmount(rawText, {
+        invoice.amountWithoutTax = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("不含税"), QStringLiteral("金额合计"), QStringLiteral("净额")
         });
     }
 
     invoice.taxAmount = findNumber({"taxAmount", "tax", "taxTotal", "税额"});
     if (invoice.taxAmount == 0.0) {
-        invoice.taxAmount = extractLabeledAmount(rawText, {
+        invoice.taxAmount = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("税额"), QStringLiteral("税金")
         });
     }
@@ -1497,7 +1055,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     invoice.passengerName = findText({"passengerName", "passenger", "乘客姓名"});
     invoice.stayDays = static_cast<int>(findNumber({"stayDays", "入住天数", "days"}));
 
-    QJsonValue itemsValue = findValueByKeysDeep(normalizedValue, {"items", "details", "明细"});
+    QJsonValue itemsValue = OcrParser::findValueByKeysDeep(normalizedValue, {"items", "details", "明细"});
     if (itemsValue.isArray()) {
         QJsonArray items = itemsValue.toArray();
         for (const auto &item : items) {
@@ -1506,7 +1064,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
             }
             QJsonObject itemObj = item.toObject();
             InvoiceItem invItem;
-            invItem.description = firstNonEmpty(itemObj, {"description", "name", "名称", "项目"});
+            invItem.description = OcrParser::firstNonEmpty(itemObj, {"description", "name", "名称", "项目"});
             invItem.quantity = parseAmount(itemObj.value("quantity"));
             if (invItem.quantity == 0.0) {
                 invItem.quantity = parseAmount(itemObj.value("qty"));
@@ -1518,6 +1076,14 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
             invItem.amount = parseAmount(itemObj.value("amount"));
             if (invItem.amount == 0.0) {
                 invItem.amount = parseAmount(itemObj.value("total"));
+            }
+            invItem.taxRate = parseAmount(itemObj.value("taxRate"));
+            if (invItem.taxRate == 0.0) {
+                invItem.taxRate = parseAmount(itemObj.value("tax"));
+            }
+            invItem.taxAmount = parseAmount(itemObj.value("taxAmount"));
+            if (invItem.taxAmount == 0.0) {
+                invItem.taxAmount = parseAmount(itemObj.value("taxFee"));
             }
             invoice.items.append(invItem);
         }
