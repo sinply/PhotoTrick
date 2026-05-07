@@ -5,7 +5,6 @@
 #include <QJsonArray>
 #include <QRegularExpression>
 #include <QStringList>
-#include <QtConcurrent>
 #include <functional>
 #include <algorithm>
 
@@ -24,7 +23,11 @@ const QString ItineraryRecognizer::ITINERARY_PROMPT = R"(
     "seatClass": "舱位/座位等级",
     "seatNumber": "座位号",
     "price": "票价（数字）",
-    "taxAmount": "税额（数字）"
+    "taxAmount": "税额（数字）",
+    "fuelSurcharge": "燃油附加费（数字，无则填0）",
+    "airportTax": "民航发展基金/机建费（数字，无则填0）",
+    "insurance": "保险费（数字，无则填0）",
+    "totalAmount": "合计金额（数字）"
 }
 
 请确保返回有效的JSON格式。如果某字段无法识别，请填null。
@@ -62,14 +65,9 @@ void ItineraryRecognizer::recognize(const QImage &image)
 
 void ItineraryRecognizer::recognizeAsync(const QImage &image)
 {
-    if (!m_ocrManager) {
-        emit recognitionError(tr("OCR管理器未设置"));
-        return;
-    }
-
-    QtConcurrent::run([this, image]() {
-        recognize(image);
-    });
+    // QtConcurrent::run + signal chain is not thread-safe;
+    // just forward to recognize() since OCR is already async via QNetworkAccessManager
+    recognize(image);
 }
 
 void ItineraryRecognizer::onOcrFinished(const QJsonObject &result)
@@ -156,11 +154,13 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
             itinerary.flightTrainNo = match.captured(1);
         }
 
-        // Also try to find flight numbers like CA1234, MU5678 in text
-        QRegularExpression flightNumRe(QStringLiteral(R"(\b([A-Z]{2}\d{3,4})\b)"));
-        match = flightNumRe.match(rawText);
-        if (match.hasMatch()) {
-            itinerary.flightTrainNo = match.captured(1);
+        // Only try pattern match if labeled extraction failed
+        if (itinerary.flightTrainNo.isEmpty()) {
+            QRegularExpression flightNumRe(QStringLiteral(R"(\b([A-Z]{2}\d{3,4})\b)"));
+            match = flightNumRe.match(rawText);
+            if (match.hasMatch()) {
+                itinerary.flightTrainNo = match.captured(1);
+            }
         }
 
         // Extract passenger name
@@ -250,9 +250,7 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
         }
 
         // Determine type from content
-        if (rawText.contains(QStringLiteral("航班")) || rawText.contains(QStringLiteral("机票"))
-            || rawText.contains(QStringLiteral("CA")) || rawText.contains(QStringLiteral("MU"))
-            || rawText.contains(QStringLiteral("CZ")) || rawText.contains(QStringLiteral("HU"))) {
+        if (rawText.contains(QStringLiteral("航班")) || rawText.contains(QStringLiteral("机票"))) {
             itinerary.type = ItineraryData::Flight;
             itinerary.typeString = QStringLiteral("机票");
         } else if (rawText.contains(QStringLiteral("火车")) || rawText.contains(QStringLiteral("高铁"))
@@ -262,11 +260,40 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
         } else if (rawText.contains(QStringLiteral("出租")) || rawText.contains(QStringLiteral("网约车"))) {
             itinerary.type = ItineraryData::Other;
             itinerary.typeString = QStringLiteral("出租车");
+        } else if (rawText.contains(QStringLiteral("汽车")) || rawText.contains(QStringLiteral("客运"))) {
+            itinerary.type = ItineraryData::Bus;
+            itinerary.typeString = QStringLiteral("汽车票");
+        }
+
+        // Detect flight/train number patterns if labeled match failed
+        if (itinerary.flightTrainNo.isEmpty()) {
+            QRegularExpression flightNumRe(QStringLiteral(R"(\b([A-Z]{2}\d{3,4})\b)"));
+            QRegularExpressionMatch fnMatch = flightNumRe.match(rawText);
+            if (fnMatch.hasMatch()) {
+                itinerary.flightTrainNo = fnMatch.captured(1);
+                if (itinerary.type == ItineraryData::Other) {
+                    itinerary.type = ItineraryData::Flight;
+                    itinerary.typeString = QStringLiteral("机票");
+                }
+            }
+        }
+
+        // Enhanced route extraction: try formats without "出发" label
+        if (itinerary.departure.isEmpty() && itinerary.destination.isEmpty()) {
+            // Pattern: "XX → YY" or "XX-YY" with station/airport names
+            QRegularExpression routeRe2(QStringLiteral(
+                R"((\p{Han}{2,}(?:站|机场|场)?)\s*[-→>—]+\s*(\p{Han}{2,}(?:站|机场|场)?))"));
+            QRegularExpressionMatch m2 = routeRe2.match(rawText);
+            if (m2.hasMatch()) {
+                itinerary.departure = m2.captured(1).trimmed();
+                itinerary.destination = m2.captured(2).trimmed();
+            }
         }
 
         qDebug() << "ItineraryRecognizer: Parsed from raw text - FlightNo:" << itinerary.flightTrainNo
                  << "Price:" << itinerary.price << "Type:" << itinerary.typeString;
 
+        itinerary.validate();
         return itinerary;
     }
 
@@ -286,16 +313,26 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
         return QString();
     };
 
-    auto findNumber = [&](const QStringList &keys) -> double {
-        double value = OcrParser::parseNumber(OcrParser::findValueByKeysDeep(normalizedValue, keys));
-        if (value > 0.0) {
-            return value;
+    auto findNumber = [&](const QStringList &keys, bool allowZero = false) -> double {
+        // First try deep search in normalizedValue
+        for (const QString &key : keys) {
+            QJsonValue deepVal = OcrParser::findValueByKeysDeep(normalizedValue, {key});
+            if (!deepVal.isUndefined() && !deepVal.isNull()) {
+                double value = OcrParser::parseNumber(deepVal);
+                if (value > 0.0 || (allowZero && value == 0.0)) {
+                    return value;
+                }
+            }
         }
+        // Then try top-level keys in normalized
         for (const QString &key : keys) {
             if (normalized.contains(key)) {
-                value = OcrParser::parseNumber(normalized.value(key));
-                if (value > 0.0) {
-                    return value;
+                const QJsonValue &val = normalized.value(key);
+                if (!val.isUndefined() && !val.isNull()) {
+                    double value = OcrParser::parseNumber(val);
+                    if (value > 0.0 || (allowZero && value == 0.0)) {
+                        return value;
+                    }
                 }
             }
         }
@@ -330,7 +367,7 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
     itinerary.seatClass = findText({"seatClass", "cabinClass", "舱位", "座位等级", "席别"});
     itinerary.seatNumber = findText({"seatNumber", "seatNo", "座位号", "座号"});
 
-    itinerary.price = findNumber({"price", "amount", "fare", "totalAmount", "票价", "票款", "金额"});
+    itinerary.price = findNumber({"price", "amount", "fare", "票价", "票款"});
     if (itinerary.price == 0.0) {
         itinerary.price = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("票价"), QStringLiteral("票款"), QStringLiteral("金额"),
@@ -338,28 +375,28 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
         });
     }
 
-    itinerary.taxAmount = findNumber({"taxAmount", "tax", "税额"});
+    itinerary.taxAmount = findNumber({"taxAmount", "tax", "税额"}, true);
     if (itinerary.taxAmount == 0.0) {
         itinerary.taxAmount = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("税额"), QStringLiteral("税费")
         });
     }
 
-    itinerary.fuelSurcharge = findNumber({"fuelSurcharge", "fuelFee", "燃油附加费", "燃油费"});
+    itinerary.fuelSurcharge = findNumber({"fuelSurcharge", "fuelFee", "燃油附加费", "燃油费"}, true);
     if (itinerary.fuelSurcharge == 0.0) {
         itinerary.fuelSurcharge = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("燃油附加费"), QStringLiteral("燃油费"), QStringLiteral("燃油")
         });
     }
 
-    itinerary.airportTax = findNumber({"airportTax", "airportFee", "constructionFee", "机建费", "机场建设费", "民航发展基金"});
+    itinerary.airportTax = findNumber({"airportTax", "airportFee", "constructionFee", "机建费", "机场建设费", "民航发展基金"}, true);
     if (itinerary.airportTax == 0.0) {
         itinerary.airportTax = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("民航发展基金"), QStringLiteral("机建费"), QStringLiteral("机场建设费"), QStringLiteral("机建")
         });
     }
 
-    itinerary.insurance = findNumber({"insurance", "insuranceFee", "保险费"});
+    itinerary.insurance = findNumber({"insurance", "insuranceFee", "保险费"}, true);
     if (itinerary.insurance == 0.0) {
         itinerary.insurance = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("保险费"), QStringLiteral("保险")
@@ -379,9 +416,11 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
 
     if (itinerary.type == ItineraryData::Other) {
         const QString hint = rawText + "\n" + itinerary.flightTrainNo + "\n" + itinerary.typeString;
-        if (hint.contains(QStringLiteral("航班")) || hint.contains(QStringLiteral("MU")) || hint.contains(QStringLiteral("CA"))) {
+        if (hint.contains(QStringLiteral("航班")) || hint.contains(QStringLiteral("机票"))
+            || QRegularExpression(R"(\b[A-Z]{2}\d{3,4}\b)").match(hint).hasMatch()) {
             itinerary.type = ItineraryData::Flight;
-        } else if (hint.contains(QStringLiteral("车次")) || hint.contains(QStringLiteral("高铁")) || hint.contains(QStringLiteral("G"))) {
+        } else if (hint.contains(QStringLiteral("车次")) || hint.contains(QStringLiteral("高铁"))
+                   || hint.contains(QStringLiteral("火车"))) {
             itinerary.type = ItineraryData::Train;
         }
     }

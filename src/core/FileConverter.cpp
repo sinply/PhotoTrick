@@ -4,6 +4,7 @@
 #include <QTemporaryFile>
 #include <QDebug>
 #include <QCoreApplication>
+#include <QFile>
 
 // Helper function to convert Windows path to WSL path
 static QString convertToWslPath(const QString &windowsPath)
@@ -23,11 +24,23 @@ FileConverter::FileConverter(QObject *parent)
     , m_pythonPath("python")
     , m_scriptPath("scripts/file_converter_cli.py")
 {
-    // If script path is relative, make it absolute based on application directory
+    // If script path is relative, search multiple locations for the script
     QFileInfo scriptInfo(m_scriptPath);
     if (scriptInfo.isRelative()) {
         QString appDir = QCoreApplication::applicationDirPath();
-        m_scriptPath = appDir + "/" + m_scriptPath;
+        QString appRelativePath = appDir + "/" + m_scriptPath;
+        QString cwdRelativePath = QDir::current().absoluteFilePath(m_scriptPath);
+        QString sourceTreePath = QDir(appDir).absoluteFilePath("../" + m_scriptPath);
+
+        if (QFile::exists(appRelativePath)) {
+            m_scriptPath = appRelativePath;
+        } else if (QFile::exists(cwdRelativePath)) {
+            m_scriptPath = cwdRelativePath;
+        } else if (QFile::exists(sourceTreePath)) {
+            m_scriptPath = QDir::cleanPath(sourceTreePath);
+        } else {
+            m_scriptPath = appRelativePath;
+        }
     }
 }
 

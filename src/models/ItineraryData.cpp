@@ -94,25 +94,64 @@ ItineraryData::Type ItineraryData::typeFromString(const QString &str)
 
 void ItineraryData::validate()
 {
-    // A valid itinerary should have at least some core data
-    if (price <= 0.0 && flightTrainNo.trimmed().isEmpty()
-        && departure.trimmed().isEmpty() && destination.trimmed().isEmpty()) {
+    // A valid itinerary needs at least one transport-specific identifier
+    bool hasTransportId = !flightTrainNo.trimmed().isEmpty();
+    bool hasRoute = !departure.trimmed().isEmpty() && !destination.trimmed().isEmpty();
+    bool hasTimeInfo = departureTime.isValid() || arrivalTime.isValid();
+    bool hasPassenger = !passengerName.trimmed().isEmpty();
+    bool hasPrice = price > 0.0;
+
+    // Minimum: transport ID OR route + (time or passenger)
+    // Price alone is NOT sufficient (invoices also have amounts)
+    bool hasCoreData = hasTransportId || (hasRoute && (hasTimeInfo || hasPassenger));
+
+    if (!hasCoreData) {
         isValidItinerary = false;
-        invalidReason = QStringLiteral("缺少核心信息（票价、航班/车次、路线）");
+        invalidReason = QStringLiteral("缺少行程单核心信息（航班/车次、路线+时间/乘客）");
         return;
     }
 
-    // Check for non-itinerary keywords that indicate misclassification
-    static const QStringList nonItineraryKeywords = {
-        QStringLiteral("发票"), QStringLiteral("增值税"),
-        QStringLiteral("收据"), QStringLiteral("报销单")
+    // Check for strong invoice markers that indicate this is NOT an itinerary
+    // These keywords are exclusive to formal invoices
+    static const QStringList strongInvoiceKeywords = {
+        QStringLiteral("价税合计"), QStringLiteral("发票代码"),
+        QStringLiteral("税率/征收率"), QStringLiteral("开票人"),
+        QStringLiteral("复核"), QStringLiteral("收款人"),
+        QStringLiteral("销售方信息"), QStringLiteral("购买方信息"),
+        QStringLiteral("税务局")
     };
-    // Only flag if there are no itinerary-specific indicators at all
-    bool hasItineraryHint = type != Other || !flightTrainNo.trimmed().isEmpty()
-        || departureTime.isValid() || arrivalTime.isValid();
-    if (!hasItineraryHint) {
+
+    // Strong invoice keywords override itinerary classification
+    // unless we also have strong itinerary-specific markers (登机牌, 行程单, 客票级别 etc.)
+    static const QStringList strongItineraryKeywords = {
+        QStringLiteral("登机牌"), QStringLiteral("BOARDING PASS"),
+        QStringLiteral("行程单"), QStringLiteral("ITINERARY"),
+        QStringLiteral("电子客票"), QStringLiteral("E-TICKET"),
+        QStringLiteral("客票级别"), QStringLiteral("客票号码"),
+        QStringLiteral("印刷序号"), QStringLiteral("民航发展基金"),
+        QStringLiteral("机建费"), QStringLiteral("燃油附加费"),
+        QStringLiteral("车厢"), QStringLiteral("检票口"),
+        QStringLiteral("客票号")
+    };
+
+    int invoiceCount = 0;
+    int itineraryCount = 0;
+    // Check sourceFile + existing typeString for itinerary markers (already set during parsing)
+    QString checkText = typeString + " " + flightTrainNo;
+    if (type == Flight) itineraryCount += 2;
+    if (type == Train) itineraryCount += 2;
+
+    for (const QString &kw : strongInvoiceKeywords) {
+        if (checkText.contains(kw, Qt::CaseInsensitive)) invoiceCount++;
+    }
+    for (const QString &kw : strongItineraryKeywords) {
+        if (checkText.contains(kw, Qt::CaseInsensitive)) itineraryCount++;
+    }
+
+    // If strong invoice markers dominate, this is likely not an itinerary
+    if (invoiceCount >= 2 && itineraryCount == 0) {
         isValidItinerary = false;
-        invalidReason = QStringLiteral("未识别出行程单特征");
+        invalidReason = QStringLiteral("检测到发票特征，非行程单文档");
         return;
     }
 

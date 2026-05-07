@@ -36,63 +36,250 @@ void debugLog(const QString &message)
     }
 }
 
-// Shared non-invoice document keywords
-// Used to detect documents that are NOT invoices (itineraries, tickets, etc.)
-const QStringList NON_INVOICE_KEYWORDS = {
-    // 登机牌/机票
+// ============================================================
+// Document classification: scoring-based system
+// ============================================================
+// Instead of a binary keyword match, we use a scoring approach:
+//   - POSITIVE invoice markers add score (prove it IS an invoice)
+//   - TIER-1 exclusive non-invoice keywords add strong negative score
+//   - TIER-2 context-dependent keywords add weak negative score
+// A document is classified as non-invoice if:
+//   netScore < 0 AND negativeScore >= 3, OR
+//   any TIER-1 keyword matches AND no positive invoice markers
+// ============================================================
+
+// Strong positive markers that ONLY appear on real invoices
+// These prove the document IS an invoice regardless of other keywords
+const QStringList POSITIVE_INVOICE_MARKERS = {
+    QStringLiteral("价税合计"),     // Only on VAT invoices
+    QStringLiteral("发票代码"),     // Invoice code field
+    QStringLiteral("发票号码"),     // Invoice number label (not the number itself)
+    QStringLiteral("税率/征收率"), // Tax rate section label
+    QStringLiteral("开票人"),       // Issuer person field
+    QStringLiteral("复核"),         // Reviewer field on invoices
+    QStringLiteral("收款人"),       // Payee field on invoices
+    QStringLiteral("销售方信息"),   // Seller info section
+    QStringLiteral("购买方信息"),   // Buyer info section
+    QStringLiteral("税号"),         // Tax ID number field
+    QStringLiteral("税务局"),       // Tax bureau (issuing authority)
+    QStringLiteral("增值税"),       // VAT label
+    QStringLiteral("机打发票"),     // Machine-printed invoice
+    QStringLiteral("电子发票"),     // Electronic invoice
+    QStringLiteral("通行费"),       // Toll fee invoice (is an invoice, not itinerary)
+    QStringLiteral("过路费"),       // Toll fee synonym
+    QStringLiteral("高速费"),       // Highway toll fee
+    QStringLiteral("定额发票"),     // Fixed-amount invoice
+    QStringLiteral("机动车销售"),   // Vehicle sales invoice
+    QStringLiteral("农产品收购"),   // Agricultural product purchase invoice
+    QStringLiteral("查验"),         // Invoice verification (on all China invoices)
+    QStringLiteral("校验码")        // Check code (on VAT invoices)
+};
+
+// Markers that appear on real invoices but ALSO on some itineraries/tickets
+// These should NOT be used alone to bypass itinerary detection
+const QStringList WEAK_POSITIVE_MARKERS = {
+    QStringLiteral("增值税"),       // Appears on airline itinerary headers
+    QStringLiteral("发票号码"),     // Airline itineraries have "发票号码" field
+    QStringLiteral("税号"),         // Can appear on itinerary issuer info
+    QStringLiteral("查验")          // Some itineraries reference invoice verification
+};
+
+// TIER-1: Exclusive non-invoice keywords that ONLY appear on non-invoices
+// These strongly indicate the document is NOT an invoice
+const QStringList EXCLUSIVE_NON_INVOICE_KEYWORDS = {
+    // 登机牌 exclusive markers
     QStringLiteral("登机牌"), QStringLiteral("BOARDING PASS"),
+    QStringLiteral("客票级别"), QStringLiteral("FARE BASIS"),
+    QStringLiteral("登机口"), QStringLiteral("GATE"),
+    QStringLiteral("座位号"), QStringLiteral("SEAT"),
+    QStringLiteral("舱位"),   QStringLiteral("CLASS"),
+    QStringLiteral("值机"), QStringLiteral("CHECK-IN"),
+    QStringLiteral("托运"), QStringLiteral("行李额"),
+    QStringLiteral("免费行李"),
+    // 行程单/电子客票 exclusive markers
+    QStringLiteral("电子客票号码"),
+    QStringLiteral("印刷序号"), QStringLiteral("SERIAL NO"),
+    QStringLiteral("销售单位代号"), QStringLiteral("AGENT CODE"),
+    QStringLiteral("填开单位"), QStringLiteral("ISSUED BY"),
+    QStringLiteral("民航发展基金"), QStringLiteral("CIVIL AVIATION"),
+    QStringLiteral("客票号码"), QStringLiteral("TICKET NO"),
+    QStringLiteral("始发站"),   // FROM too generic in Chinese
+    QStringLiteral("目的站"),   // TO too generic in Chinese
+    QStringLiteral("签转"), QStringLiteral("退改签"),
+    // 火车票 exclusive markers
+    QStringLiteral("车厢"), QStringLiteral("CAR NO"),
+    QStringLiteral("检票口"),
+    QStringLiteral("公路客运"),
+    // 出差审批/费用报告 exclusive markers
+    QStringLiteral("出差审批"), QStringLiteral("审批单"),
+    QStringLiteral("费用报告"), QStringLiteral("EXPENSE REPORT"),
+    QStringLiteral("报销单"), QStringLiteral("EXPENSE CLAIM"),
+    QStringLiteral("费用清单"), QStringLiteral("EXPENSE SHEET"),
+    // 保险单
+    QStringLiteral("保险单"), QStringLiteral("保险单号"),
+    // 收据/确认单 (not formal invoices)
+    QStringLiteral("收据"), QStringLiteral("RECEIPT"),
+    QStringLiteral("确认单"), QStringLiteral("CONFIRMATION"),
+    QStringLiteral("预订确认"), QStringLiteral("BOOKING CONFIRMATION"),
+    // 身份证件
+    QStringLiteral("身份证"), QStringLiteral("驾驶证"), QStringLiteral("护照"),
+    QStringLiteral("签证"),
+    // 合同/协议
+    QStringLiteral("合同编号"), QStringLiteral("协议编号"),
+    // 国际航班行程单独有
+    QStringLiteral("PASSENGER NAME"),
+    QStringLiteral("NOT TRANSFERABLE"),
+    QStringLiteral("E-TICKET RECEIPT")
+};
+
+// TIER-2: Context-dependent keywords that may appear on invoices too
+// These need corroboration (multiple matches) and can be overridden by positive markers
+const QStringList AMBIGUOUS_NON_INVOICE_KEYWORDS = {
     QStringLiteral("航班号"), QStringLiteral("FLIGHT NO"),
     QStringLiteral("承运人"), QStringLiteral("CARRIER"),
     QStringLiteral("起飞时间"), QStringLiteral("DEPTIME"),
     QStringLiteral("到达时间"), QStringLiteral("ARRTIME"),
-    QStringLiteral("登机口"),  // GATE too generic
-    QStringLiteral("座位号"),  // SEAT too generic
-    QStringLiteral("舱位"),  // CLASS too generic
-    QStringLiteral("客票级别"), QStringLiteral("FARE BASIS"),
-    // 行程单/电子客票
+    QStringLiteral("航线"), QStringLiteral("ROUTE"),
     QStringLiteral("行程单"), QStringLiteral("ITINERARY"),
     QStringLiteral("电子客票"), QStringLiteral("E-TICKET"),
-    QStringLiteral("客票号码"), QStringLiteral("TICKET NO"),
-    QStringLiteral("印刷序号"), QStringLiteral("SERIAL NO"),
-    QStringLiteral("销售单位代号"), QStringLiteral("AGENT CODE"),
-    QStringLiteral("填开单位"), QStringLiteral("ISSUED BY"),
     QStringLiteral("旅客姓名"), QStringLiteral("PASSENGER"),
-    QStringLiteral("始发站"),  // FROM too generic
-    QStringLiteral("目的站"),  // TO too generic
-    QStringLiteral("航线"), QStringLiteral("ROUTE"),
+    QStringLiteral("火车票"), QStringLiteral("TRAIN TICKET"),
+    QStringLiteral("车次"),   // Train number - can appear on taxi invoices too
+    QStringLiteral("开往"),
+    QStringLiteral("出租车"), QStringLiteral("TAXI"),
+    QStringLiteral("网约车"),
+    QStringLiteral("报销凭证"),
+    QStringLiteral("审批"),
+    QStringLiteral("航班"),
     QStringLiteral("票价"), QStringLiteral("FARE"),
     QStringLiteral("燃油附加费"), QStringLiteral("FUEL SURCHARGE"),
     QStringLiteral("机场建设费"), QStringLiteral("AIRPORT TAX"),
-    QStringLiteral("民航发展基金"), QStringLiteral("CIVIL AVIATION"),
     QStringLiteral("保险费"), QStringLiteral("INSURANCE"),
     QStringLiteral("合计金额"), QStringLiteral("TOTAL FARE"),
-    QStringLiteral("电子客票号码"),
-    // 火车票
-    QStringLiteral("火车票"), QStringLiteral("TRAIN TICKET"),
-    QStringLiteral("车次"), QStringLiteral("TRAIN NO"),
-    QStringLiteral("车厢"), QStringLiteral("CAR NO"),
-    QStringLiteral("开往"),  // TO too generic
-    QStringLiteral("检票口"),  // GATE too generic
-    // 汽车票/出租车
-    QStringLiteral("车票"),  // TICKET too generic
-    QStringLiteral("出租车"), QStringLiteral("TAXI"),
-    QStringLiteral("网约车"), QStringLiteral("RIDE"),
-    // 其他
-    QStringLiteral("报销凭证"), QStringLiteral("保险单"),
-    QStringLiteral("审批"), QStringLiteral("出差审批"),
-    QStringLiteral("航班"),  // FLIGHT too generic
-    // 费用报告/报销单
-    QStringLiteral("费用报告"), QStringLiteral("EXPENSE REPORT"),
-    QStringLiteral("报销单"), QStringLiteral("EXPENSE CLAIM"),
-    QStringLiteral("费用清单"), QStringLiteral("EXPENSE SHEET"),
-    QStringLiteral("费用明细"), QStringLiteral("EXPENSE DETAIL"),
-    // 国际航线常见词
-    QStringLiteral("PASSENGER NAME"),
+    QStringLiteral("车票"),
     QStringLiteral("FLIGHT DATE"),
     QStringLiteral("ISSUE DATE"),
-    QStringLiteral("NOT TRANSFERABLE"),
-    QStringLiteral("E-TICKET RECEIPT")
+    QStringLiteral("订票"), QStringLiteral("预订"),
+    QStringLiteral("出票"), QStringLiteral("改签"),
+    QStringLiteral("退票费"), QStringLiteral("改签费")
 };
+
+// Scoring result for document classification
+struct DocClassification {
+    bool isInvoice;
+    int positiveScore;    // Count of positive invoice markers found
+    int exclusiveScore;   // Count of exclusive non-invoice keywords found
+    int ambiguousScore;   // Count of ambiguous non-invoice keywords found
+    QString reason;       // Human-readable reason
+};
+
+// Check if text contains a keyword, using word-boundary matching for English keywords
+// to prevent false positives (e.g., "GATE" matching "gateway", "CLASS" matching "classification")
+bool keywordMatch(const QString &text, const QString &keyword, Qt::CaseSensitivity cs = Qt::CaseInsensitive)
+{
+    // If keyword contains only Latin letters (English), use word-boundary matching
+    static QRegularExpression latinOnlyRe(QStringLiteral("^[A-Za-z\\s]+$"));
+    if (latinOnlyRe.match(keyword).hasMatch()) {
+        // \b word boundary ensures we match whole words only
+        auto opts = (cs == Qt::CaseInsensitive) ? QRegularExpression::CaseInsensitiveOption : QRegularExpression::NoPatternOption;
+        QRegularExpression re(QStringLiteral("\\b") + QRegularExpression::escape(keyword) + QStringLiteral("\\b"), opts);
+        return re.match(text).hasMatch();
+    }
+    // Chinese/mixed keywords: use simple contains (Chinese doesn't have word boundary issues)
+    return text.contains(keyword, cs);
+}
+
+// Score a document text to determine if it's an invoice or not
+DocClassification classifyDocument(const QString &text)
+{
+    DocClassification result;
+    result.positiveScore = 0;
+    result.exclusiveScore = 0;
+    result.ambiguousScore = 0;
+
+    // Count positive invoice markers
+    QStringList matchedPositive;
+    for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+        if (keywordMatch(text, marker)) {
+            result.positiveScore++;
+            matchedPositive << marker;
+        }
+    }
+
+    // Count exclusive non-invoice keywords
+    QStringList matchedExclusive;
+    for (const QString &keyword : EXCLUSIVE_NON_INVOICE_KEYWORDS) {
+        if (keywordMatch(text, keyword)) {
+            result.exclusiveScore++;
+            matchedExclusive << keyword;
+        }
+    }
+
+    // Count ambiguous non-invoice keywords
+    QStringList matchedAmbiguous;
+    for (const QString &keyword : AMBIGUOUS_NON_INVOICE_KEYWORDS) {
+        if (keywordMatch(text, keyword)) {
+            result.ambiguousScore++;
+            matchedAmbiguous << keyword;
+        }
+    }
+
+    debugLog(QString("Classification scores: positive=%1 (%2) exclusive=%3 (%4) ambiguous=%5 (%6)")
+        .arg(result.positiveScore).arg(matchedPositive.join(","))
+        .arg(result.exclusiveScore).arg(matchedExclusive.join(","))
+        .arg(result.ambiguousScore).arg(matchedAmbiguous.join(",")));
+
+    // Decision logic:
+    // 1. If there are positive invoice markers AND no exclusive keywords → invoice
+    //    (Positive markers prove it's an invoice, e.g., a taxi invoice with "出租车" but also "价税合计")
+    if (result.positiveScore > 0 && result.exclusiveScore == 0) {
+        result.isInvoice = true;
+        result.reason = QString();
+        debugLog("  → Invoice: positive markers present, no exclusive non-invoice keywords");
+        return result;
+    }
+
+    // 2. If exclusive keywords found AND no positive markers → NOT invoice
+    //    (Things like "登机牌", "客票级别" never appear on invoices)
+    if (result.exclusiveScore > 0 && result.positiveScore == 0) {
+        result.isInvoice = false;
+        result.reason = QStringLiteral("非发票文档（检测到：%1）").arg(matchedExclusive.first());
+        debugLog(QString("  → NOT invoice: exclusive keywords without positive markers (%1)").arg(matchedExclusive.first()));
+        return result;
+    }
+
+    // 3. If both positive markers AND exclusive keywords exist → positive wins
+    //    (Extremely rare edge case; trust the invoice markers)
+    if (result.positiveScore > 0 && result.exclusiveScore > 0) {
+        // But if exclusive score is much higher, likely not an invoice
+        if (result.exclusiveScore >= 3 && result.positiveScore <= 1) {
+            result.isInvoice = false;
+            result.reason = QStringLiteral("非发票文档（检测到多处非发票特征：%1）").arg(matchedExclusive.first());
+            debugLog("  → NOT invoice: exclusive keywords overwhelmingly dominate");
+            return result;
+        }
+        result.isInvoice = true;
+        result.reason = QString();
+        debugLog("  → Invoice: positive markers override exclusive keywords");
+        return result;
+    }
+
+    // 4. No positive markers AND no exclusive keywords → check ambiguous keywords
+    //    A few ambiguous keywords alone aren't enough to reject (e.g., "航班" could be in an invoice item)
+    //    Need multiple ambiguous keywords (>=3) to reject
+    if (result.ambiguousScore >= 3) {
+        result.isInvoice = false;
+        result.reason = QStringLiteral("非发票文档（检测到多项非发票特征）");
+        debugLog(QString("  → NOT invoice: %1 ambiguous keywords without positive markers").arg(result.ambiguousScore));
+        return result;
+    }
+
+    // 5. Few or no ambiguous keywords → likely an invoice (will be validated further by invoice number check)
+    result.isInvoice = true;
+    result.reason = QString();
+    debugLog("  → Invoice: no strong non-invoice indicators");
+    return result;
+}
 
 // Ride-hailing platform keywords for detecting ride-hailing itineraries
 const QStringList RIDE_HAILING_KEYWORDS = {
@@ -100,7 +287,10 @@ const QStringList RIDE_HAILING_KEYWORDS = {
     QStringLiteral("网约车"), QStringLiteral("曹操出行"), QStringLiteral("神州专车"),
     QStringLiteral("首汽约车"), QStringLiteral("T3出行"), QStringLiteral("美团打车"),
     QStringLiteral("花小猪"), QStringLiteral("嘀嗒出行"), QStringLiteral("享道出行"),
-    QStringLiteral("如祺出行")
+    QStringLiteral("如祺出行"), QStringLiteral("哈啰出行"), QStringLiteral("哈啰单车"),
+    QStringLiteral("同程打车"), QStringLiteral("携程打车"), QStringLiteral("去哪儿打车"),
+    QStringLiteral("飞猪打车"), QStringLiteral("万顺叫车"), QStringLiteral("阳光出行"),
+    QStringLiteral("安安用车"), QStringLiteral("帮邦行"), QStringLiteral("粤省心")
 };
 
 // Check if sellerName indicates a real airline company
@@ -139,54 +329,108 @@ bool isAirlineCompany(const QString &sellerName)
     return false;
 }
 
-// Check if document is a ride-hailing itinerary
+// Check if document is a ride-hailing itinerary (NOT an invoice from a ride-hailing company)
+// A ride-hailing company can issue a proper invoice (e.g., for corporate accounts)
+// Only flag as itinerary if there are no strong invoice structural markers
 bool isRideHailingItinerary(const QString &sellerName, const QString &rawText)
 {
-    // Check sellerName first
+    // If the text contains strong invoice markers (excluding weak ones that appear on itineraries),
+    // it's a real invoice regardless of seller
+    for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+        if (!WEAK_POSITIVE_MARKERS.contains(marker) && keywordMatch(rawText, marker)) {
+            return false;
+        }
+    }
+
+    // Check sellerName for ride-hailing company
     for (const QString &keyword : RIDE_HAILING_KEYWORDS) {
         if (sellerName.contains(keyword, Qt::CaseInsensitive)) {
             return true;
         }
     }
-    // Also check raw text as fallback
+    // Check raw text - but only match ride-hailing platform names + itinerary keywords together
+    bool hasRideHailingKeyword = false;
     for (const QString &keyword : RIDE_HAILING_KEYWORDS) {
         if (rawText.contains(keyword, Qt::CaseInsensitive)) {
-            return true;
+            hasRideHailingKeyword = true;
+            break;
         }
     }
-    return false;
-}
-
-// Check if document is an airline ticket/itinerary
-bool isAirlineTicketDoc(const QString &sellerName, const QString &rawText, const QJsonArray &items = QJsonArray())
-{
-    // Check sellerName for airline company
-    if (isAirlineCompany(sellerName)) {
-        return true;
-    }
-
-    // Check items for "机票款" description
-    for (const QJsonValue &item : items) {
-        if (item.isObject()) {
-            QString desc = item.toObject().value("description").toString();
-            if (desc.contains(QStringLiteral("机票款")) || desc.contains(QStringLiteral("机票"))) {
+    if (hasRideHailingKeyword) {
+        // Only flag as itinerary if there are also ride-specific non-invoice markers
+        static const QStringList rideItineraryMarkers = {
+            QStringLiteral("行程单"), QStringLiteral("行程详情"),
+            QStringLiteral("上车"), QStringLiteral("下车"),
+            QStringLiteral("出发地"), QStringLiteral("目的地"),
+            QStringLiteral("等待时间"), QStringLiteral("行驶里程"),
+            QStringLiteral("ITINERARY")
+        };
+        for (const QString &marker : rideItineraryMarkers) {
+            if (keywordMatch(rawText, marker)) {
                 return true;
             }
         }
     }
+    return false;
+}
+
+// Check if document is an airline ticket/itinerary (NOT an invoice from an airline)
+// An invoice FROM an airline (e.g., refund receipt) is still an invoice.
+// Only return true if the document is clearly a ticket/itinerary, not an invoice.
+bool isAirlineTicketDoc(const QString &sellerName, const QString &rawText, const QJsonArray &items = QJsonArray())
+{
+    // If the text contains strong invoice markers (excluding weak ones that appear on itineraries),
+    // it's a real invoice regardless of seller
+    for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+        if (!WEAK_POSITIVE_MARKERS.contains(marker) && keywordMatch(rawText, marker)) {
+            return false;
+        }
+    }
+
+    // Check sellerName for airline company - but only if no invoice structure
+    if (isAirlineCompany(sellerName)) {
+        return true;
+    }
+
+    // Check items for airline-ticket-specific descriptions
+    // Travel agency invoices can have items like "代订机票服务费", "差旅服务", etc.
+    // Only flag if ALL items are pure travel-ticket items (suggesting itinerary, not invoice)
+    if (!items.isEmpty()) {
+        bool allItemsTravelRelated = true;
+        for (const QJsonValue &item : items) {
+            if (item.isObject()) {
+                QString desc = item.toObject().value("description").toString();
+                // Travel agency service items — these are legitimate invoice line items
+                if (desc.contains(QStringLiteral("机票款")) || desc.contains(QStringLiteral("机票费"))
+                    || desc.contains(QStringLiteral("代订")) || desc.contains(QStringLiteral("差旅服务"))
+                    || desc.contains(QStringLiteral("商旅服务")) || desc.contains(QStringLiteral("会务费"))
+                    || desc.contains(QStringLiteral("服务费")) || desc.contains(QStringLiteral("代办"))) {
+                    allItemsTravelRelated = false;
+                    break;
+                }
+                if (!desc.contains(QStringLiteral("机票")) && !desc.contains(QStringLiteral("航班"))
+                    && !desc.contains(QStringLiteral("燃油")) && !desc.contains(QStringLiteral("机建"))
+                    && !desc.contains(QStringLiteral("保险")) && !desc.contains(QStringLiteral("民航"))
+                    && !desc.contains(QStringLiteral("客票")) && !desc.contains(QStringLiteral("退票"))) {
+                    allItemsTravelRelated = false;
+                    break;
+                }
+            }
+        }
+        if (allItemsTravelRelated) {
+            return true;
+        }
+    }
 
     return false;
 }
 
-// Check for non-invoice document keywords in text
-bool containsNonInvoiceKeyword(const QString &text)
+// Legacy helper: check if document classification result indicates non-invoice
+bool isClassifiedAsNonInvoice(const QString &text, QString &reason)
 {
-    for (const QString &keyword : NON_INVOICE_KEYWORDS) {
-        if (text.contains(keyword, Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    return false;
+    DocClassification cls = classifyDocument(text);
+    reason = cls.reason;
+    return !cls.isInvoice;
 }
 
 }
@@ -387,6 +631,11 @@ double extractAmountWithoutTaxFromTable(const QString &rawText)
 
 void reconcileAmounts(InvoiceData &invoice)
 {
+    // Clamp negative amounts to zero
+    if (invoice.totalAmount < 0.0) invoice.totalAmount = 0.0;
+    if (invoice.amountWithoutTax < 0.0) invoice.amountWithoutTax = 0.0;
+    if (invoice.taxAmount < 0.0) invoice.taxAmount = 0.0;
+
     // Derive totalAmount from other amounts
     if (invoice.totalAmount <= 0.0 && invoice.amountWithoutTax > 0.0 && invoice.taxAmount > 0.0) {
         invoice.totalAmount = invoice.amountWithoutTax + invoice.taxAmount;
@@ -605,15 +854,23 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     };
 
     auto findNumber = [&](const QStringList &keys) -> double {
-        double value = parseAmount(OcrParser::findValueByKeysDeep(normalizedValue, keys));
-        if (value > 0.0) {
-            return value;
+        // First try deep search in normalizedValue
+        QJsonValue deepVal = OcrParser::findValueByKeysDeep(normalizedValue, keys);
+        if (!deepVal.isUndefined() && !deepVal.isNull()) {
+            double value = parseAmount(deepVal);
+            if (value >= 0.0) {
+                return value;
+            }
         }
+        // Then try top-level keys in normalized
         for (const QString &key : keys) {
             if (normalized.contains(key)) {
-                value = parseAmount(normalized.value(key));
-                if (value > 0.0) {
-                    return value;
+                const QJsonValue &val = normalized.value(key);
+                if (!val.isUndefined() && !val.isNull()) {
+                    double value = parseAmount(val);
+                    if (value >= 0.0) {
+                        return value;
+                    }
                 }
             }
         }
@@ -692,21 +949,14 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
             }
         }
 
-        // Check if this is a valid invoice (must have invoice-specific markers)
-        // IMPORTANT: Must have invoice number to be a valid invoice
-        // 行程单、登机牌、火车票等不是发票，不应混入
-
-        // First check: exclude non-invoice document types using shared keywords
-        if (containsNonInvoiceKeyword(rawText)) {
-            // Find which keyword matched for reporting
-            for (const QString &keyword : NON_INVOICE_KEYWORDS) {
-                if (rawText.contains(keyword, Qt::CaseInsensitive)) {
-                    debugLog(QString("  Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
-                    invoice.isValidInvoice = false;
-                    invoice.invalidReason = QStringLiteral("非发票文档（检测到：%1）").arg(keyword);
-                    return invoice;
-                }
-            }
+        // Check if this is a valid invoice using scoring-based classification
+        // This replaces the old binary keyword check
+        QString classificationReason;
+        if (isClassifiedAsNonInvoice(rawText, classificationReason)) {
+            debugLog(QString("  Document classified as non-invoice: %1").arg(classificationReason));
+            invoice.isValidInvoice = false;
+            invoice.invalidReason = classificationReason;
+            return invoice;
         }
 
         // Second check: Must have valid invoice number (at least 8 digits/letters)
@@ -722,15 +972,19 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
             return invoice;
         }
 
-        // Third check: Must have invoice-specific keywords
-        bool hasInvoiceKeywords = rawText.contains(QStringLiteral("发票")) ||
-                                  rawText.contains(QStringLiteral("税务局")) ||
-                                  rawText.contains(QStringLiteral("价税合计")) ||
-                                  rawText.contains(QStringLiteral("税率/征收率")) ||
-                                  rawText.contains(QStringLiteral("开票人"));
+        // Third check: Must have at least one positive invoice marker
+        // This confirms the document is actually an invoice, not just some document with an 8-digit number
+        bool hasInvoiceMarker = false;
+        for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+            if (rawText.contains(marker, Qt::CaseInsensitive)) {
+                hasInvoiceMarker = true;
+                debugLog(QString("  Found positive invoice marker: %1").arg(marker));
+                break;
+            }
+        }
 
-        if (!hasInvoiceKeywords) {
-            debugLog("  Missing invoice-specific keywords, marking as invalid");
+        if (!hasInvoiceMarker) {
+            debugLog("  Missing positive invoice markers, marking as invalid");
             invoice.isValidInvoice = false;
             invoice.invalidReason = QStringLiteral("缺少发票特征关键词");
             return invoice;
@@ -862,22 +1116,46 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     };
 
     // First check: documentType field from API response
-    // This is the most reliable way to detect non-invoice documents
+    // Not fully trusted alone - cross-check with positive invoice markers
     if (hasValidValue("documentType")) {
         QString docType = normalized.value("documentType").toString().trimmed().toLower();
         debugLog(QString("documentType field: '%1'").arg(docType));
 
         if (docType != "invoice" && docType != QStringLiteral("发票")) {
-            invoice.isValidInvoice = false;
-            if (docType == "itinerary" || docType == QStringLiteral("行程单")) {
-                invoice.invalidReason = QStringLiteral("非发票文档（检测到行程单/交通票据特征字段）");
-            } else if (docType == "expense_report" || docType == QStringLiteral("费用报告") || docType == QStringLiteral("报销单")) {
-                invoice.invalidReason = QStringLiteral("非发票文档（检测到费用报告/报销单）");
-            } else {
-                invoice.invalidReason = QStringLiteral("非发票文档（文档类型：%1）").arg(docType);
+            // Before trusting documentType, check if there are strong positive invoice markers
+            // The API can misclassify documents, so trust structural evidence over documentType
+            bool hasStrongPositiveMarkers = false;
+            if (!rawText.isEmpty()) {
+                for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+                    if (rawText.contains(marker, Qt::CaseInsensitive)) {
+                        hasStrongPositiveMarkers = true;
+                        debugLog(QString("  documentType says non-invoice, but found positive marker: %1").arg(marker));
+                        break;
+                    }
+                }
             }
-            debugLog(QString("Non-invoice document detected by documentType field: %1").arg(docType));
-            return invoice;
+            // Also check for tax structure in API response
+            if (!hasStrongPositiveMarkers && (hasValidValue("taxAmount") || hasValidValue("taxRate")
+                || hasValidValue("amountWithoutTax") || hasValidValue("buyerTaxId")
+                || hasValidValue("sellerTaxId"))) {
+                hasStrongPositiveMarkers = true;
+                debugLog("  documentType says non-invoice, but found tax structure evidence");
+            }
+
+            if (!hasStrongPositiveMarkers) {
+                invoice.isValidInvoice = false;
+                if (docType == "itinerary" || docType == QStringLiteral("行程单")) {
+                    invoice.invalidReason = QStringLiteral("非发票文档（检测到行程单/交通票据特征字段）");
+                } else if (docType == "expense_report" || docType == QStringLiteral("费用报告") || docType == QStringLiteral("报销单")) {
+                    invoice.invalidReason = QStringLiteral("非发票文档（检测到费用报告/报销单）");
+                } else {
+                    invoice.invalidReason = QStringLiteral("非发票文档（文档类型：%1）").arg(docType);
+                }
+                debugLog(QString("Non-invoice document detected by documentType field: %1").arg(docType));
+                return invoice;
+            } else {
+                debugLog("  Overriding documentType classification - positive markers present");
+            }
         }
     }
 
@@ -919,17 +1197,27 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
                             hasValidValue("invoiceNo") ||
                             hasValidValue("invoiceType");
 
-    debugLog(QString("Result: hasItineraryFields=%1, hasInvoiceFields=%2, isRideHailing=%3, isAirline=%4")
+    // Also check for tax-related structural evidence (strong invoice indicator)
+    bool hasTaxStructure = hasValidValue("taxAmount") || hasValidValue("taxRate")
+                        || hasValidValue("amountWithoutTax") || hasValidValue("buyerTaxId")
+                        || hasValidValue("sellerTaxId");
+
+    debugLog(QString("Result: hasItineraryFields=%1, hasInvoiceFields=%2, hasTaxStructure=%3, isRideHailing=%4, isAirline=%5")
              .arg(hasItineraryFields ? "true" : "false")
              .arg(hasInvoiceFields ? "true" : "false")
+             .arg(hasTaxStructure ? "true" : "false")
              .arg(detectedRideHailing ? "true" : "false")
              .arg(detectedAirlineTicket ? "true" : "false"));
 
-    // 判定为非发票的条件：
-    // 1. 存在行程单特征且缺少发票特征
-    // 2. 打车平台行程单
-    // 3. 航空公司机票行程单
-    if ((hasItineraryFields && !hasInvoiceFields) || detectedRideHailing || detectedAirlineTicket) {
+    // 判定为非发票的条件 (more careful than before):
+    // Tax structure (taxAmount, taxRate, etc.) is a strong invoice indicator that overrides
+    // itinerary/airline/ride-hailing signals. But sellerName alone is NOT sufficient because
+    // airline itineraries also have sellerName (airline name) + invoiceNumber.
+    // Only hasTaxStructure + hasInvoiceFields can override itinerary detection.
+    if (hasInvoiceFields && hasTaxStructure) {
+        debugLog("Has invoice fields + tax structure, treating as invoice despite itinerary hints");
+        // Continue to parse as invoice - don't return here
+    } else if ((hasItineraryFields && !hasInvoiceFields) || detectedRideHailing || detectedAirlineTicket) {
         invoice.isValidInvoice = false;
         if (detectedRideHailing) {
             invoice.invalidReason = QStringLiteral("非发票文档（检测到打车平台行程单）");
@@ -945,21 +1233,19 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         return invoice;
     }
 
-    // Second check: exclude non-invoice document types by keyword in raw text using shared keywords
-    if (containsNonInvoiceKeyword(rawText)) {
-        // Find which keyword matched for reporting
-        for (const QString &keyword : NON_INVOICE_KEYWORDS) {
-            if (rawText.contains(keyword, Qt::CaseInsensitive)) {
-                invoice.isValidInvoice = false;
-                invoice.invalidReason = QStringLiteral("非发票文档（检测到关键词：%1）").arg(keyword);
-                debugLog(QString("Non-invoice document detected (keyword: %1), marking as invalid").arg(keyword));
-                return invoice;
-            }
+    // Second check: exclude non-invoice document types by scoring-based classification on raw text
+    {
+        QString classificationReason;
+        if (isClassifiedAsNonInvoice(rawText, classificationReason)) {
+            invoice.isValidInvoice = false;
+            invoice.invalidReason = classificationReason;
+            debugLog(QString("Non-invoice document detected by classification: %1").arg(classificationReason));
+            return invoice;
         }
     }
 
     // Third check: For API OCR with structured data but no raw text,
-    // check for non-invoice keywords in structured field values
+    // check for non-invoice keywords in structured field values using scoring
     // This catches cases like expense reports where API "hallucinates" invoice structure
     if (rawText.isEmpty() && hasStructuredData) {
         // Collect all string values from the structured data to check
@@ -971,15 +1257,12 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         }
         QString combinedText = structuredTexts.join(" ");
 
-        if (containsNonInvoiceKeyword(combinedText)) {
-            for (const QString &keyword : NON_INVOICE_KEYWORDS) {
-                if (combinedText.contains(keyword, Qt::CaseInsensitive)) {
-                    invoice.isValidInvoice = false;
-                    invoice.invalidReason = QStringLiteral("非发票文档（检测到关键词：%1）").arg(keyword);
-                    debugLog(QString("Non-invoice document detected in structured data (keyword: %1), marking as invalid").arg(keyword));
-                    return invoice;
-                }
-            }
+        QString classificationReason;
+        if (isClassifiedAsNonInvoice(combinedText, classificationReason)) {
+            invoice.isValidInvoice = false;
+            invoice.invalidReason = classificationReason;
+            debugLog(QString("Non-invoice document detected in structured data: %1").arg(classificationReason));
+            return invoice;
         }
     }
 
@@ -1037,22 +1320,68 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         invoice.taxRate = extractTaxRateFromText(rawText);
     }
 
-    // For API-based OCR, mark as valid if we have invoice number or total amount
-    if (!invoice.invoiceNumber.isEmpty() || invoice.totalAmount > 0) {
+    // Extract itinerary-related fields BEFORE validation so they're available for checks
+    invoice.departure = findText({"departure", "from", "出发地", "始发地"});
+    invoice.destination = findText({"destination", "to", "目的地", "到达地"});
+    invoice.passengerName = findText({"passengerName", "passenger", "乘客姓名"});
+
+    // For API-based OCR, validate with stronger checks
+    // Having invoice number OR amount is necessary but not sufficient
+    // Must also have invoice-specific structural evidence
+    bool hasInvoiceNumber = !invoice.invoiceNumber.isEmpty();
+    bool hasAmount = invoice.totalAmount > 0;
+
+    // Check for invoice-specific structural evidence in the extracted data
+    bool hasInvoiceStructure = false;
+    // 1. Has buyer/seller (invoice-specific parties)
+    if (!invoice.buyerName.isEmpty() || !invoice.sellerName.isEmpty()) {
+        hasInvoiceStructure = true;
+    }
+    // 2. Has tax-related fields (invoices have explicit tax)
+    if (invoice.taxRate > 0 || invoice.taxAmount > 0 || invoice.amountWithoutTax > 0) {
+        hasInvoiceStructure = true;
+    }
+    // 3. Has invoice type label
+    if (!invoice.invoiceType.isEmpty()) {
+        hasInvoiceStructure = true;
+    }
+    // 4. Check raw text for strong positive invoice markers
+    if (!rawText.isEmpty()) {
+        for (const QString &marker : POSITIVE_INVOICE_MARKERS) {
+            if (rawText.contains(marker, Qt::CaseInsensitive)) {
+                hasInvoiceStructure = true;
+                break;
+            }
+        }
+    }
+
+    if ((hasInvoiceNumber || hasAmount) && hasInvoiceStructure) {
         invoice.isValidInvoice = true;
-        debugLog("Marked as valid invoice (API data with invoice number or amount)");
+        debugLog("Marked as valid invoice (API data with invoice evidence)");
+    } else if (hasInvoiceNumber && hasAmount) {
+        // Has both number and amount but no structural evidence
+        // Be cautious - could be an itinerary that happens to have a number
+        // Check if we have itinerary indicators instead
+        bool hasItineraryHints = !invoice.passengerName.isEmpty() ||
+                                 !invoice.departure.isEmpty() ||
+                                 !invoice.destination.isEmpty();
+        if (hasItineraryHints) {
+            invoice.isValidInvoice = false;
+            invoice.invalidReason = QStringLiteral("非发票文档（检测到行程单特征）");
+            debugLog("Marked as INVALID: has number/amount but itinerary indicators present");
+        } else {
+            invoice.isValidInvoice = true;
+            debugLog("Marked as valid invoice (has number and amount, no itinerary indicators)");
+        }
     } else {
         invoice.isValidInvoice = false;
-        invoice.invalidReason = QStringLiteral("API返回数据中未找到发票号码或金额");
-        debugLog("Marked as INVALID invoice (no invoice number or amount from API)");
+        invoice.invalidReason = QStringLiteral("API返回数据中未找到足够的发票特征");
+        debugLog("Marked as INVALID invoice (insufficient invoice evidence from API)");
     }
 
     // Reconcile amounts
     reconcileAmounts(invoice);
 
-    invoice.departure = findText({"departure", "from", "出发地", "始发地"});
-    invoice.destination = findText({"destination", "to", "目的地", "到达地"});
-    invoice.passengerName = findText({"passengerName", "passenger", "乘客姓名"});
     invoice.stayDays = static_cast<int>(findNumber({"stayDays", "入住天数", "days"}));
 
     QJsonValue itemsValue = OcrParser::findValueByKeysDeep(normalizedValue, {"items", "details", "明细"});
@@ -1078,8 +1407,8 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
                 invItem.amount = parseAmount(itemObj.value("total"));
             }
             invItem.taxRate = parseAmount(itemObj.value("taxRate"));
-            if (invItem.taxRate == 0.0) {
-                invItem.taxRate = parseAmount(itemObj.value("tax"));
+            if (invItem.taxRate == 0.0 && !itemObj.contains("taxRate")) {
+                invItem.taxRate = parseAmount(itemObj.value("rate"));
             }
             invItem.taxAmount = parseAmount(itemObj.value("taxAmount"));
             if (invItem.taxAmount == 0.0) {

@@ -6,6 +6,30 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QBuffer>
+#include <QRegularExpression>
+
+namespace {
+
+QString buildMessagesUrl(QString baseUrl)
+{
+    baseUrl = baseUrl.trimmed();
+    while (baseUrl.endsWith('/')) {
+        baseUrl.chop(1);
+    }
+
+    if (baseUrl.endsWith(QStringLiteral("/messages"))) {
+        return baseUrl;
+    }
+
+    const QRegularExpression versionSuffix(QStringLiteral(R"(/v\d+$)"));
+    if (versionSuffix.match(baseUrl).hasMatch()) {
+        return baseUrl + QStringLiteral("/messages");
+    }
+
+    return baseUrl + QStringLiteral("/v1/messages");
+}
+
+}
 
 ClaudeClient::ClaudeClient(QObject *parent)
     : OcrInterface(parent)
@@ -94,7 +118,7 @@ void ClaudeClient::sendRequest()
     requestBody["messages"] = messages;
 
     // Send request
-    QString url = m_baseUrl + "/v1/messages";
+    const QString url = buildMessagesUrl(m_baseUrl);
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("x-api-key", m_apiKey.toUtf8());
@@ -135,7 +159,16 @@ void ClaudeClient::handleResponse(QNetworkReply *reply)
     QJsonObject result = doc.object();
 
     if (result.contains("error")) {
-        emit recognitionError(result["error"].toObject()["message"].toString());
+        const QJsonValue errVal = result["error"];
+        if (errVal.isString()) {
+            emit recognitionError(errVal.toString());
+        } else if (errVal.isObject()) {
+            QString msg = errVal.toObject().value("message").toString();
+            if (msg.isEmpty()) msg = errVal.toObject().value("msg").toString();
+            emit recognitionError(msg.isEmpty() ? tr("API错误") : msg);
+        } else {
+            emit recognitionError(tr("API错误"));
+        }
         return;
     }
 

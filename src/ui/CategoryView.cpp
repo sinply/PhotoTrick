@@ -9,6 +9,9 @@ CategoryView::CategoryView(QWidget *parent)
     , m_tableTransportation(nullptr)
     , m_tableAccommodation(nullptr)
     , m_tableDining(nullptr)
+    , m_tableItineraryAll(nullptr)
+    , m_tableFlight(nullptr)
+    , m_tableTrain(nullptr)
 {
     setupUI();
 }
@@ -20,7 +23,7 @@ void CategoryView::setupUI()
 
     m_tabWidget = new QTabWidget(this);
 
-    auto createTable = [this]() -> QTableWidget* {
+    auto createInvoiceTable = [this]() -> QTableWidget* {
         QTableWidget *table = new QTableWidget(this);
         table->setColumnCount(8);
         table->setHorizontalHeaderLabels({
@@ -33,15 +36,37 @@ void CategoryView::setupUI()
         return table;
     };
 
-    m_tableAll = createTable();
-    m_tableTransportation = createTable();
-    m_tableAccommodation = createTable();
-    m_tableDining = createTable();
+    auto createItineraryTable = [this]() -> QTableWidget* {
+        QTableWidget *table = new QTableWidget(this);
+        table->setColumnCount(8);
+        table->setHorizontalHeaderLabels({
+            tr("航班/车次"), tr("乘客"), tr("出发地"),
+            tr("目的地"), tr("出发时间"), tr("票价"), tr("税额"), tr("合计")
+        });
+        table->horizontalHeader()->setStretchLastSection(true);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        return table;
+    };
 
-    m_tabWidget->addTab(m_tableAll, tr("全部"));
+    // Invoice tabs
+    m_tableAll = createInvoiceTable();
+    m_tableTransportation = createInvoiceTable();
+    m_tableAccommodation = createInvoiceTable();
+    m_tableDining = createInvoiceTable();
+
+    // Itinerary tabs
+    m_tableItineraryAll = createItineraryTable();
+    m_tableFlight = createItineraryTable();
+    m_tableTrain = createItineraryTable();
+
+    m_tabWidget->addTab(m_tableAll, tr("发票-全部"));
     m_tabWidget->addTab(m_tableTransportation, tr("交通"));
     m_tabWidget->addTab(m_tableAccommodation, tr("住宿"));
     m_tabWidget->addTab(m_tableDining, tr("餐饮"));
+    m_tabWidget->addTab(m_tableItineraryAll, tr("行程-全部"));
+    m_tabWidget->addTab(m_tableFlight, tr("机票"));
+    m_tabWidget->addTab(m_tableTrain, tr("火车"));
 
     layout->addWidget(m_tabWidget);
 }
@@ -84,12 +109,35 @@ void CategoryView::addInvoiceRow(const QStringList &row, InvoiceData::Category c
     }
 }
 
+void CategoryView::addItineraryRow(const QStringList &row, ItineraryData::Type type)
+{
+    m_dataItineraryAll.append(row);
+    refreshTable(m_tableItineraryAll, m_dataItineraryAll);
+
+    switch (type) {
+    case ItineraryData::Flight:
+        m_dataFlight.append(row);
+        refreshTable(m_tableFlight, m_dataFlight);
+        break;
+    case ItineraryData::Train:
+    case ItineraryData::Bus:
+        m_dataTrain.append(row);
+        refreshTable(m_tableTrain, m_dataTrain);
+        break;
+    default:
+        break;
+    }
+}
+
 void CategoryView::clearAll()
 {
     m_dataAll.clear();
     m_dataTransportation.clear();
     m_dataAccommodation.clear();
     m_dataDining.clear();
+    m_dataItineraryAll.clear();
+    m_dataFlight.clear();
+    m_dataTrain.clear();
 
     m_tableAll->clearContents();
     m_tableAll->setRowCount(0);
@@ -99,4 +147,10 @@ void CategoryView::clearAll()
     m_tableAccommodation->setRowCount(0);
     m_tableDining->clearContents();
     m_tableDining->setRowCount(0);
+    m_tableItineraryAll->clearContents();
+    m_tableItineraryAll->setRowCount(0);
+    m_tableFlight->clearContents();
+    m_tableFlight->setRowCount(0);
+    m_tableTrain->clearContents();
+    m_tableTrain->setRowCount(0);
 }

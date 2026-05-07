@@ -78,6 +78,7 @@ bool MarkdownExporter::exportInvoices(const QString &filePath, const QList<Invoi
         }
     }
 
+    out.flush();
     file.close();
     return true;
 }
@@ -133,6 +134,76 @@ QString MarkdownExporter::formatInvoiceDetail(const InvoiceData &invoice)
     return result;
 }
 
+bool MarkdownExporter::exportItineraries(const QString &filePath, const QList<ItineraryData> &itineraries)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        m_lastError = tr("无法打开文件: %1").arg(filePath);
+        return false;
+    }
+
+    QTextStream out(&file);
+
+    out << "# 行程单汇总报告\n\n";
+    out << "生成时间: " << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") << "\n\n";
+
+    // Summary
+    double totalPrice = 0, totalTax = 0, totalFuel = 0, totalAirport = 0, totalIns = 0, totalAll = 0;
+    for (const auto &iti : itineraries) {
+        totalPrice += iti.price;
+        totalTax += iti.taxAmount;
+        totalFuel += iti.fuelSurcharge;
+        totalAirport += iti.airportTax;
+        totalIns += iti.insurance;
+        totalAll += iti.totalAmount;
+    }
+    if (totalAll == 0.0) totalAll = totalPrice + totalTax + totalFuel + totalAirport + totalIns;
+
+    out << "## 汇总统计\n\n";
+    out << QString("| 项目 | 金额 |\n");
+    out << QString("|------|------|\n");
+    out << QString("| 票价合计 | ¥%1 |\n").arg(totalPrice, 0, 'f', 2);
+    out << QString("| 税额合计 | ¥%1 |\n").arg(totalTax, 0, 'f', 2);
+    out << QString("| 燃油附加费合计 | ¥%1 |\n").arg(totalFuel, 0, 'f', 2);
+    out << QString("| 机建费合计 | ¥%1 |\n").arg(totalAirport, 0, 'f', 2);
+    out << QString("| 保险费合计 | ¥%1 |\n").arg(totalIns, 0, 'f', 2);
+    out << QString("| **总合计** | **¥%1** |\n\n").arg(totalAll, 0, 'f', 2);
+
+    // Detail table
+    out << "## 行程单明细\n\n";
+    out << formatItineraryTable(itineraries);
+
+    out.flush();
+    file.close();
+    return true;
+}
+
+QString MarkdownExporter::formatItineraryTable(const QList<ItineraryData> &itineraries)
+{
+    QString result;
+    result += "| 类型 | 航班/车次 | 乘客 | 出发地 | 目的地 | 出发时间 | 到达时间 | 票价 | 税额 | 燃油 | 机建 | 保险 | 合计 |\n";
+    result += "|------|-----------|------|--------|--------|----------|----------|------|------|------|------|------|------|\n";
+
+    for (const auto &iti : itineraries) {
+        result += QString("| %1 | %2 | %3 | %4 | %5 | %6 | %7 | ¥%8 | ¥%9 | ¥%10 | ¥%11 | ¥%12 | ¥%13 |\n")
+                     .arg(iti.typeToString())
+                     .arg(iti.flightTrainNo)
+                     .arg(iti.passengerName)
+                     .arg(iti.departure)
+                     .arg(iti.destination)
+                     .arg(iti.departureTime.isValid() ? iti.departureTime.toString("yyyy-MM-dd HH:mm") : QString())
+                     .arg(iti.arrivalTime.isValid() ? iti.arrivalTime.toString("yyyy-MM-dd HH:mm") : QString())
+                     .arg(iti.price, 0, 'f', 2)
+                     .arg(iti.taxAmount, 0, 'f', 2)
+                     .arg(iti.fuelSurcharge, 0, 'f', 2)
+                     .arg(iti.airportTax, 0, 'f', 2)
+                     .arg(iti.insurance, 0, 'f', 2)
+                     .arg(iti.totalAmount, 0, 'f', 2);
+    }
+
+    return result;
+}
+
 bool MarkdownExporter::exportTable(const QString &filePath, const TableData &table)
 {
     QFile file(filePath);
@@ -149,6 +220,7 @@ bool MarkdownExporter::exportTable(const QString &filePath, const TableData &tab
 
     out << formatTable(table);
 
+    out.flush();
     file.close();
     return true;
 }
@@ -177,6 +249,64 @@ bool MarkdownExporter::exportTables(const QString &filePath, const QList<TableDa
         index++;
     }
 
+    out.flush();
+    file.close();
+    return true;
+}
+
+bool MarkdownExporter::exportAll(const QString &filePath,
+                                 const QList<InvoiceData> &invoices,
+                                 const QList<ItineraryData> &itineraries,
+                                 const QList<TableData> &tables)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        m_lastError = tr("无法打开文件: %1").arg(filePath);
+        return false;
+    }
+
+    QTextStream out(&file);
+
+    out << "# 综合识别报告\n\n";
+    out << "生成时间: " << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") << "\n\n";
+
+    bool hasContent = false;
+
+    if (!invoices.isEmpty()) {
+        out << "## 发票汇总\n\n";
+        out << formatInvoiceTable(invoices);
+        out << "\n";
+        hasContent = true;
+    }
+
+    if (!itineraries.isEmpty()) {
+        out << "## 行程单汇总\n\n";
+        out << formatItineraryTable(itineraries);
+        out << "\n";
+        hasContent = true;
+    }
+
+    if (!tables.isEmpty()) {
+        out << "## 表格数据\n\n";
+        int index = 1;
+        for (const auto &table : tables) {
+            if (!table.title.isEmpty()) {
+                out << QString("### %1\n\n").arg(table.title);
+            } else {
+                out << QString("### 表格 %1\n\n").arg(index);
+            }
+            out << formatTable(table);
+            out << "\n";
+            index++;
+        }
+        hasContent = true;
+    }
+
+    if (!hasContent) {
+        out << "无识别结果。\n";
+    }
+
+    out.flush();
     file.close();
     return true;
 }

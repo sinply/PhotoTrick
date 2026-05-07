@@ -115,8 +115,7 @@ QWidget *SettingsDialog::createExportTab()
 
     m_comboDefaultFormat = new QComboBox(this);
     m_comboDefaultFormat->addItem(tr("Markdown"), "markdown");
-    m_comboDefaultFormat->addItem(tr("Word"), "word");
-    m_comboDefaultFormat->addItem(tr("Excel"), "excel");
+    m_comboDefaultFormat->addItem(tr("CSV"), "excel");
     m_comboDefaultFormat->addItem(tr("JSON"), "json");
     form->addRow(tr("默认导出格式:"), m_comboDefaultFormat);
 

@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 // Provider configurations
 struct ProviderConfig {
@@ -23,6 +24,28 @@ static const QMap<QString, ProviderConfig> PROVIDERS = {
     {"glm", {"GLM (智谱)", "https://open.bigmodel.cn/api/paas/v4", {"glm-4v"}, true}},
     {"custom", {"自定义", "", {}, true}}
 };
+
+static QString buildVersionedEndpoint(QString baseUrl, const QString &endpoint)
+{
+    baseUrl = baseUrl.trimmed();
+    while (baseUrl.endsWith('/')) {
+        baseUrl.chop(1);
+    }
+
+    const QString normalizedEndpoint = endpoint.startsWith('/')
+        ? endpoint
+        : QStringLiteral("/") + endpoint;
+    if (baseUrl.endsWith(normalizedEndpoint)) {
+        return baseUrl;
+    }
+
+    const QRegularExpression versionSuffix(QStringLiteral(R"(/v\d+$)"));
+    if (versionSuffix.match(baseUrl).hasMatch()) {
+        return baseUrl + normalizedEndpoint;
+    }
+
+    return baseUrl + QStringLiteral("/v1") + normalizedEndpoint;
+}
 
 ApiConfigWidget::ApiConfigWidget(const QString &backend, QWidget *parent)
     : QDialog(parent)
@@ -303,21 +326,27 @@ void ApiConfigWidget::onTestConnection()
     QNetworkAccessManager *manager = new QNetworkAccessManager(this);
 
     // Determine API endpoint based on backend type
-    QString url = baseUrl;
-    if (m_backend == "claude_format") {
-        url += "/v1/messages";
-    } else {
-        url += "/v1/chat/completions";
-    }
+    const QString url = (m_backend == "claude_format")
+        ? buildVersionedEndpoint(baseUrl, QStringLiteral("/messages"))
+        : buildVersionedEndpoint(baseUrl, QStringLiteral("/chat/completions"));
 
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKey).toUtf8());
 
     QJsonObject requestBody;
     requestBody["model"] = model;
     requestBody["max_tokens"] = 10;
-    requestBody["messages"] = QJsonArray{QJsonObject{{"role", "user"}, {"content", "Hi"}}};
+
+    if (m_backend == "claude_format") {
+        request.setRawHeader("x-api-key", apiKey.toUtf8());
+        request.setRawHeader("anthropic-version", "2023-06-01");
+        requestBody["messages"] = QJsonArray{
+            QJsonObject{{"role", "user"}, {"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", "Hi"}}}}}
+        };
+    } else {
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKey).toUtf8());
+        requestBody["messages"] = QJsonArray{QJsonObject{{"role", "user"}, {"content", "Hi"}}};
+    }
 
     QNetworkReply *reply = manager->post(request, QJsonDocument(requestBody).toJson());
 
@@ -335,9 +364,16 @@ void ApiConfigWidget::onTestConnection()
             if (doc.isObject()) {
                 QJsonObject obj = doc.object();
                 if (obj.contains("error")) {
-                    QJsonObject error = obj["error"].toObject();
-                    if (error.contains("message")) {
-                        errorMsg = error["message"].toString();
+                    const QJsonValue errorValue = obj.value("error");
+                    if (errorValue.isString()) {
+                        errorMsg = errorValue.toString();
+                    } else if (errorValue.isObject()) {
+                        const QJsonObject error = errorValue.toObject();
+                        if (error.contains("message")) {
+                            errorMsg = error["message"].toString();
+                        } else if (error.contains("msg")) {
+                            errorMsg = error["msg"].toString();
+                        }
                     }
                 }
             }

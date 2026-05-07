@@ -120,6 +120,7 @@ void PaddleOcr::recognize(const QImage &image, const QString &prompt)
     // Send request
     QNetworkRequest request(QUrl(m_serverUrl + "/ocr"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setTransferTimeout(m_timeout);
 
     QNetworkReply *reply = m_networkManager->post(request, doc.toJson());
 

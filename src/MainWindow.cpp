@@ -188,6 +188,8 @@ void MainWindow::setupConnections()
     connect(m_processingPanel, &ProcessingPanel::cancelProcessing, this, [this]() {
         m_isProcessing = false;
         m_pendingFiles.clear();
+        m_pendingExtraPages.clear();
+        m_currentPageNumber = 1;
         m_statusLabel->setText(tr("已取消"));
         m_progressBar->hide();
     });
@@ -239,6 +241,14 @@ void MainWindow::setupConnections()
     });
     connect(m_itineraryRecognizer, &ItineraryRecognizer::rawOcrReceived, this, [logRawOcr](const QJsonObject &result) {
         logRawOcr(QStringLiteral("行程单"), result);
+    });
+
+    // Connect export requests from ResultPreview
+    connect(m_resultPreview, &ResultPreview::exportRequested, this, [this](const QString &format) {
+        if (format == "markdown") onExportMarkdown();
+        else if (format == "excel") onExportCsv();
+        else if (format == "json") onExportJson();
+        else if (format == "word") onExportCsv();  // fallback to CSV for now
     });
 
     // Connect API settings change to save
@@ -318,6 +328,7 @@ void MainWindow::onProcessingStarted()
 
     m_isProcessing = true;
     m_currentFileIndex = 0;
+    m_currentPageNumber = 1;
 
     // Reset batch result table
     resetBatchResultTable();
@@ -507,6 +518,10 @@ void MainWindow::onProcessingFinished()
     // Generate summary report for non-invoice and skipped files
     writeBatchSummaryFile();
 
+    // Clear tracking for next batch (after report is written)
+    m_nonInvoiceFiles.clear();
+    m_skippedFiles.clear();
+
     // 隐藏进度条
     QTimer::singleShot(2000, this, [this]() {
         m_progressBar->hide();
@@ -565,6 +580,11 @@ void MainWindow::onServerStatusChanged(int status)
 
 void MainWindow::onInvoiceRecognized(const InvoiceData &invoice)
 {
+    if (!m_isProcessing) {
+        qDebug() << "MainWindow: Ignoring invoice result after processing stopped";
+        return;
+    }
+
     // Copy and set source file
     InvoiceData inv = invoice;
     inv.sourceFile = currentProcessingFileName();
@@ -592,6 +612,22 @@ void MainWindow::onInvoiceRecognized(const InvoiceData &invoice)
         m_processingPanel->appendLog(tr("  跳过非发票文件: %1 - %2")
             .arg(fileName)
             .arg(m_nonInvoiceFiles[currentFile]));
+        // Show in result preview so user can see what was skipped
+        if (m_resultPreview) {
+            QStringList headers{
+                tr("发票号码"), tr("类型"), tr("金额"), tr("税额"),
+                tr("税率"), tr("日期"), tr("备注")
+            };
+            QStringList row;
+            row << tr("-")
+                << tr("非发票")
+                << tr("0.00")
+                << tr("0.00")
+                << tr("-")
+                << tr("-")
+                << tr("%1 - %2").arg(currentFile, m_nonInvoiceFiles[currentFile]);
+            appendBatchResultRow(headers, row);
+        }
     } else {
         // Valid invoice - add to results
         m_processingPanel->appendLog(tr("  识别成功: 发票号 %1, 金额 ¥%2, 税额 ¥%3, 税率 %4%, 分类: %5")
@@ -650,6 +686,11 @@ void MainWindow::onInvoiceRecognized(const InvoiceData &invoice)
 
 void MainWindow::onTableExtracted(const TableData &table)
 {
+    if (!m_isProcessing) {
+        qDebug() << "MainWindow: Ignoring table result after processing stopped";
+        return;
+    }
+
     qDebug() << "MainWindow: Table extracted - Rows:" << table.rows.size();
 
     // Update progress
@@ -729,6 +770,11 @@ void MainWindow::onTableExtracted(const TableData &table)
 
 void MainWindow::onItineraryRecognized(const ItineraryData &itinerary)
 {
+    if (!m_isProcessing) {
+        qDebug() << "MainWindow: Ignoring itinerary result after processing stopped";
+        return;
+    }
+
     // Copy and set source file
     ItineraryData iti = itinerary;
     iti.sourceFile = currentProcessingFileName();
@@ -737,32 +783,61 @@ void MainWindow::onItineraryRecognized(const ItineraryData &itinerary)
     }
 
     qDebug() << "MainWindow: Itinerary recognized - " << iti.flightTrainNo
-             << "Route:" << iti.departure << "->" << iti.destination;
+             << "Route:" << iti.departure << "->" << iti.destination
+             << "IsValid:" << iti.isValidItinerary;
 
     // Update progress
     m_progressBar->setValue(static_cast<int>(100.0 * (m_currentFileIndex + 1) / m_pendingFiles.size()));
 
-    // 记录识别结果
-    const bool hasCoreData = !iti.flightTrainNo.trimmed().isEmpty()
-        || !iti.departure.trimmed().isEmpty()
-        || !iti.destination.trimmed().isEmpty()
-        || iti.price > 0.0;
-    if (hasCoreData) {
-        m_processingPanel->appendLog(tr("  识别成功: %1 %2->%3, 金额 ¥%4, 税额 ¥%5")
-            .arg(iti.flightTrainNo)
-            .arg(iti.departure)
-            .arg(iti.destination)
-            .arg(iti.price, 0, 'f', 2)
-            .arg(iti.taxAmount, 0, 'f', 2));
-    } else {
-        m_processingPanel->appendLog(tr("  未识别出有效行程单字段"));
+    // Check if this is a valid itinerary
+    if (!iti.isValidItinerary) {
+        QString reason = iti.invalidReason.isEmpty() ? tr("非行程单文档") : iti.invalidReason;
+        m_nonInvoiceFiles[iti.sourceFile] = reason;
+        m_processingPanel->appendLog(tr("  跳过非行程单文件: %1 - %2")
+            .arg(QFileInfo(iti.sourceFile).fileName())
+            .arg(reason));
+        // Still show in result preview so user can see what was skipped
+        if (m_resultPreview) {
+            QStringList headers{
+                tr("文件"), tr("类型"), tr("乘客"), tr("出发地"),
+                tr("目的地"), tr("航班/车次"), tr("出发时间"), tr("到达时间"),
+                tr("票价"), tr("税额"), tr("燃油"), tr("机建"), tr("保险"), tr("合计")
+            };
+            QStringList row;
+            row << iti.sourceFile
+                << tr("非行程单")
+                << QString()
+                << QString()
+                << QString()
+                << reason
+                << QString()
+                << QString()
+                << tr("0.00")
+                << tr("0.00")
+                << tr("0.00")
+                << tr("0.00")
+                << tr("0.00")
+                << tr("0.00");
+            appendBatchResultRow(headers, row);
+        }
+        advanceToNextFile();
+        return;
     }
+
+    // 记录识别结果
+    m_processingPanel->appendLog(tr("  识别成功: %1 %2->%3, 票价 ¥%4, 合计 ¥%5")
+        .arg(iti.flightTrainNo)
+        .arg(iti.departure)
+        .arg(iti.destination)
+        .arg(iti.price, 0, 'f', 2)
+        .arg(iti.totalAmount, 0, 'f', 2));
 
     // Display result with accumulation
     if (m_resultPreview) {
         QStringList headers{
             tr("文件"), tr("类型"), tr("乘客"), tr("出发地"),
-            tr("目的地"), tr("航班/车次"), tr("金额"), tr("税额")
+            tr("目的地"), tr("航班/车次"), tr("出发时间"), tr("到达时间"),
+            tr("票价"), tr("税额"), tr("燃油"), tr("机建"), tr("保险"), tr("合计")
         };
 
         QStringList row;
@@ -772,10 +847,31 @@ void MainWindow::onItineraryRecognized(const ItineraryData &itinerary)
             << iti.departure
             << iti.destination
             << iti.flightTrainNo
+            << (iti.departureTime.isValid() ? iti.departureTime.toString("yyyy-MM-dd HH:mm") : QString())
+            << (iti.arrivalTime.isValid() ? iti.arrivalTime.toString("yyyy-MM-dd HH:mm") : QString())
             << QString::number(iti.price, 'f', 2)
-            << QString::number(iti.taxAmount, 'f', 2);
+            << QString::number(iti.taxAmount, 'f', 2)
+            << QString::number(iti.fuelSurcharge, 'f', 2)
+            << QString::number(iti.airportTax, 'f', 2)
+            << QString::number(iti.insurance, 'f', 2)
+            << QString::number(iti.totalAmount, 'f', 2);
 
         appendBatchResultRow(headers, row);
+    }
+
+    // Update category view
+    if (m_categoryView) {
+        QStringList catRow;
+        catRow << iti.flightTrainNo
+               << iti.passengerName
+               << iti.departure
+               << iti.destination
+               << (iti.departureTime.isValid() ? iti.departureTime.toString("yyyy-MM-dd HH:mm") : QString())
+               << QString::number(iti.price, 'f', 2)
+               << QString::number(iti.taxAmount, 'f', 2)
+               << QString::number(iti.totalAmount, 'f', 2);
+
+        m_categoryView->addItineraryRow(catRow, iti.type);
     }
 
     // Accumulate for export
@@ -787,15 +883,17 @@ void MainWindow::onItineraryRecognized(const ItineraryData &itinerary)
 
 void MainWindow::onProcessingError(const QString &error)
 {
+    if (!m_isProcessing) {
+        qDebug() << "MainWindow: Ignoring processing error after processing stopped:" << error;
+        return;
+    }
+
     qWarning() << "MainWindow: Processing error:" << error;
 
     m_statusLabel->setText(tr("错误: %1").arg(error.left(50)));
 
-    // 记录错误
+    // 记录错误（批量处理不弹窗，避免中断）
     m_processingPanel->appendLog(tr("  错误: %1").arg(error));
-
-    // Show error to user
-    QMessageBox::warning(this, tr("处理错误"), error);
 
     // Continue with next file
     advanceToNextFile();
@@ -814,12 +912,7 @@ void MainWindow::onExportMarkdown()
     if (path.isEmpty()) return;
 
     MarkdownExporter exporter;
-    bool ok = false;
-    if (!m_invoices.isEmpty()) {
-        ok = exporter.exportInvoices(path, m_invoices);
-    } else if (!m_tables.isEmpty()) {
-        ok = exporter.exportTables(path, m_tables);
-    }
+    bool ok = exporter.exportAll(path, m_invoices, m_itineraries, m_tables);
     if (ok) {
         m_processingPanel->appendLog(tr("已导出 Markdown: %1").arg(path));
     } else {
@@ -829,7 +922,7 @@ void MainWindow::onExportMarkdown()
 
 void MainWindow::onExportCsv()
 {
-    if (m_invoices.isEmpty() && m_tables.isEmpty()) {
+    if (m_invoices.isEmpty() && m_itineraries.isEmpty() && m_tables.isEmpty()) {
         QMessageBox::information(this, tr("导出"), tr("没有可导出的数据"));
         return;
     }
@@ -840,12 +933,7 @@ void MainWindow::onExportCsv()
     if (path.isEmpty()) return;
 
     CsvExporter exporter;
-    bool ok = false;
-    if (!m_invoices.isEmpty()) {
-        ok = exporter.exportInvoices(path, m_invoices);
-    } else if (!m_tables.isEmpty()) {
-        ok = exporter.exportTable(path, m_tables.first());
-    }
+    bool ok = exporter.exportAll(path, m_invoices, m_itineraries, m_tables);
     if (ok) {
         m_processingPanel->appendLog(tr("已导出 CSV: %1").arg(path));
     } else {
@@ -947,6 +1035,8 @@ void MainWindow::resetBatchResultTable()
     m_tables.clear();
     m_nonInvoiceFiles.clear();
     m_skippedFiles.clear();
+    m_pendingExtraPages.clear();
+    m_currentPageNumber = 1;
     if (m_resultPreview) {
         m_resultPreview->clearData();
     }
@@ -967,13 +1057,13 @@ void MainWindow::appendBatchResultRow(const QStringList &headers, const QStringL
 {
     if (headers.isEmpty()) return;
 
-    if (m_resultHeaders.isEmpty()) {
-        m_resultHeaders = headers;
-    }
-
-    if (m_resultHeaders != headers) {
+    if (!m_resultHeaders.isEmpty() && m_resultHeaders != headers) {
         qWarning() << "MainWindow: result headers mismatch, ignore row";
         return;
+    }
+
+    if (m_resultHeaders.isEmpty()) {
+        m_resultHeaders = headers;
     }
 
     QStringList normalized = row;
@@ -1037,10 +1127,6 @@ void MainWindow::writeBatchSummaryFile()
     file.close();
 
     m_processingPanel->appendLog(tr("处理报告已生成: %1").arg(reportPath));
-
-    // Clear tracking for next batch
-    m_nonInvoiceFiles.clear();
-    m_skippedFiles.clear();
 }
 
 void MainWindow::skipCurrentFile(const QString &reason)

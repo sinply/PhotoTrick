@@ -29,7 +29,6 @@ signals:
 
 private slots:
     void onExportMarkdown();
-    void onExportWord();
     void onExportExcel();
     void onExportJson();
 
@@ -41,21 +40,13 @@ private:
     DisplayMode m_displayMode;
     QTabWidget *m_tabWidget;
     QTableWidget *m_tableWidget;
-    QTableWidget *m_tableTransportation;
-    QTableWidget *m_tableAccommodation;
-    QTableWidget *m_tableDining;
 
     // Summary
     QWidget *m_summaryWidget;
     QLabel *m_labelTotal;
     QLabel *m_labelTaxTotal;
     QLabel *m_labelCount;
-
-    // Export buttons
-    QPushButton *m_btnExportMarkdown;
-    QPushButton *m_btnExportWord;
-    QPushButton *m_btnExportExcel;
-    QPushButton *m_btnExportJson;
+    double m_itineraryGrandTotal = 0.0;
 };
 
 #endif // RESULTPREVIEW_H

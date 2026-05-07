@@ -30,7 +30,7 @@ void InvoiceClassifier::initKeywords()
     // 餐饮类关键词
     m_keywords[InvoiceData::Dining] = {
         QStringLiteral("餐饮"), QStringLiteral("餐厅"), QStringLiteral("饭店"),
-        QStringLiteral("酒店"), QStringLiteral("美食"), QStringLiteral("快餐"),
+        QStringLiteral("美食"), QStringLiteral("快餐"),
         QStringLiteral("外卖"), QStringLiteral("食品"), QStringLiteral("饮品"),
         QStringLiteral("咖啡"), QStringLiteral("茶楼"), QStringLiteral("小吃"),
         QStringLiteral("火锅"), QStringLiteral("烧烤"), QStringLiteral("海鲜"),
@@ -96,12 +96,18 @@ InvoiceData::Category InvoiceClassifier::matchBySellerName(const QString &seller
 
     // 特殊匹配规则
 
-    // 航空公司
+    // 航空公司 - but exclude non-transport companies like "航空食品有限公司"
     QStringList airlines = {
-        QStringLiteral("航空"), QStringLiteral("机场")
+        QStringLiteral("航空公司"), QStringLiteral("航空有限公司"), QStringLiteral("航空股份有限公司"),
+        QStringLiteral("机场")
     };
     for (const QString &keyword : airlines) {
         if (sellerName.contains(keyword)) {
+            // Exclude food/catering subsidiaries of airlines
+            if (sellerName.contains(QStringLiteral("食品")) || sellerName.contains(QStringLiteral("餐饮"))
+                || sellerName.contains(QStringLiteral("配餐"))) {
+                return InvoiceData::Dining;
+            }
             return InvoiceData::Transportation;
         }
     }
@@ -120,8 +126,13 @@ InvoiceData::Category InvoiceClassifier::matchBySellerName(const QString &seller
     };
     for (const QString &keyword : hotels) {
         if (sellerName.contains(keyword)) {
-            // 注意：酒店餐饮需要进一步判断
-            // 如果发票金额较小且包含餐饮关键词，可能是餐饮
+            // Check if seller name also contains dining keywords
+            // e.g., "XX酒店餐厅" should be Dining, not Accommodation
+            for (const QString &diningKw : m_keywords[InvoiceData::Dining]) {
+                if (sellerName.contains(diningKw)) {
+                    return InvoiceData::Dining;
+                }
+            }
             return InvoiceData::Accommodation;
         }
     }
