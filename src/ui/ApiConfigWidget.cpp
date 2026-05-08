@@ -1,5 +1,6 @@
 #include "ApiConfigWidget.h"
 #include "../core/ConfigManager.h"
+#include "../ocr/ApiDefaults.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -74,8 +75,8 @@ void ApiConfigWidget::setupUI()
 
     // Provider
     m_comboProvider = new QComboBox(this);
-    for (auto it = PROVIDERS.begin(); it != PROVIDERS.end(); ++it) {
-        m_comboProvider->addItem(it.value().name, it.key());
+    for (const ApiProviderConfig &provider : ApiDefaults::providersForBackend(m_backend)) {
+        m_comboProvider->addItem(provider.name, provider.key);
     }
     form->addRow(tr("服务商:"), m_comboProvider);
 
@@ -157,10 +158,13 @@ void ApiConfigWidget::loadSettings()
 
     // Populate models for current provider (without triggering signal)
     QString providerKey = m_comboProvider->currentData().toString();
-    if (PROVIDERS.contains(providerKey)) {
-        m_comboModel->clear();
-        for (const QString &model : PROVIDERS[providerKey].models) {
-            m_comboModel->addItem(model);
+    for (const ApiProviderConfig &provider : ApiDefaults::providersForBackend(m_backend)) {
+        if (provider.key == providerKey) {
+            m_comboModel->clear();
+            for (const QString &model : provider.models) {
+                m_comboModel->addItem(model);
+            }
+            break;
         }
     }
 
@@ -172,13 +176,15 @@ void ApiConfigWidget::loadSettings()
     // Set base URL - saved value takes priority over provider default
     if (!savedBaseUrl.isEmpty()) {
         m_editBaseUrl->setText(savedBaseUrl);
-    } else if (PROVIDERS.contains(providerKey)) {
-        m_editBaseUrl->setText(PROVIDERS[providerKey].baseUrl);
+    } else {
+        m_editBaseUrl->setText(ApiDefaults::defaultBaseUrlForBackend(m_backend));
     }
 
     // Set model
     if (!savedModel.isEmpty()) {
         m_comboModel->setEditText(savedModel);
+    } else {
+        m_comboModel->setEditText(ApiDefaults::defaultModelForBackend(m_backend));
     }
 
     // Update status
@@ -283,19 +289,29 @@ void ApiConfigWidget::setApiStatus(ApiStatus status, const QString &message)
 void ApiConfigWidget::onProviderChanged(int index)
 {
     QString providerKey = m_comboProvider->itemData(index).toString();
+    const QString currentBaseUrl = m_editBaseUrl->text().trimmed();
+    bool shouldReplaceBaseUrl = currentBaseUrl.isEmpty();
 
-    if (PROVIDERS.contains(providerKey)) {
-        const ProviderConfig &config = PROVIDERS[providerKey];
-
-        // Populate models
-        m_comboModel->clear();
-        for (const QString &model : config.models) {
-            m_comboModel->addItem(model);
+    for (const ApiProviderConfig &config : ApiDefaults::providersForBackend(m_backend)) {
+        if (!config.baseUrl.isEmpty() && currentBaseUrl == config.baseUrl) {
+            shouldReplaceBaseUrl = true;
+            break;
         }
+    }
 
-        // Auto-fill base URL only if empty (user hasn't entered anything)
-        if (m_editBaseUrl->text().trimmed().isEmpty()) {
-            m_editBaseUrl->setText(config.baseUrl);
+    for (const ApiProviderConfig &config : ApiDefaults::providersForBackend(m_backend)) {
+        if (config.key == providerKey) {
+            // Populate models
+            m_comboModel->clear();
+            for (const QString &model : config.models) {
+                m_comboModel->addItem(model);
+            }
+
+            // Auto-fill base URL when it is empty or still on a known provider default.
+            if (shouldReplaceBaseUrl) {
+                m_editBaseUrl->setText(config.baseUrl);
+            }
+            break;
         }
     }
 
@@ -327,8 +343,8 @@ void ApiConfigWidget::onTestConnection()
 
     // Determine API endpoint based on backend type
     const QString url = (m_backend == "claude_format")
-        ? buildVersionedEndpoint(baseUrl, QStringLiteral("/messages"))
-        : buildVersionedEndpoint(baseUrl, QStringLiteral("/chat/completions"));
+        ? ApiDefaults::buildMessagesUrl(baseUrl)
+        : ApiDefaults::buildChatCompletionsUrl(baseUrl);
 
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");

@@ -1,4 +1,5 @@
 #include "ClaudeClient.h"
+#include "ApiDefaults.h"
 #include "../utils/OcrParser.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -6,36 +7,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QBuffer>
-#include <QRegularExpression>
-
-namespace {
-
-QString buildMessagesUrl(QString baseUrl)
-{
-    baseUrl = baseUrl.trimmed();
-    while (baseUrl.endsWith('/')) {
-        baseUrl.chop(1);
-    }
-
-    if (baseUrl.endsWith(QStringLiteral("/messages"))) {
-        return baseUrl;
-    }
-
-    const QRegularExpression versionSuffix(QStringLiteral(R"(/v\d+$)"));
-    if (versionSuffix.match(baseUrl).hasMatch()) {
-        return baseUrl + QStringLiteral("/messages");
-    }
-
-    return baseUrl + QStringLiteral("/v1/messages");
-}
-
-}
 
 ClaudeClient::ClaudeClient(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
-    , m_baseUrl("https://api.anthropic.com")
-    , m_model("claude-3-5-sonnet-20241022")
+    , m_baseUrl(ApiDefaults::defaultBaseUrlForBackend(QStringLiteral("claude_format")))
+    , m_model(ApiDefaults::defaultModelForBackend(QStringLiteral("claude_format")))
 {
 }
 
@@ -118,7 +95,7 @@ void ClaudeClient::sendRequest()
     requestBody["messages"] = messages;
 
     // Send request
-    const QString url = buildMessagesUrl(m_baseUrl);
+    const QString url = ApiDefaults::buildMessagesUrl(m_baseUrl);
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("x-api-key", m_apiKey.toUtf8());

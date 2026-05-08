@@ -2,8 +2,26 @@
 #include "ConfigManager.h"
 #include "ocr/OcrInterface.h"
 #include "ocr/PaddleOcr.h"
+#include "ocr/ApiDefaults.h"
 #include "ocr/ClaudeClient.h"
 #include "ocr/OpenAIClient.h"
+
+namespace {
+
+QString backendKey(OcrManager::Backend backend)
+{
+    switch (backend) {
+    case OcrManager::Claude_Format:
+        return QStringLiteral("claude_format");
+    case OcrManager::OpenAI_Format:
+        return QStringLiteral("openai_format");
+    case OcrManager::PaddleOCR_Local:
+        return QStringLiteral("paddle_local");
+    }
+    return QString();
+}
+
+} // namespace
 
 OcrManager::OcrManager(QObject *parent)
     : QObject(parent)
@@ -37,10 +55,19 @@ void OcrManager::setBackend(Backend backend)
 
     if (m_currentClient) {
         m_currentClient->setApiKey(m_apiKey);
-        if (!m_baseUrl.isEmpty()) {
-            m_currentClient->setBaseUrl(m_baseUrl);
+        const QString key = backendKey(m_backend);
+        const QString baseUrl = m_baseUrl.isEmpty()
+            ? ApiDefaults::defaultBaseUrlForBackend(key)
+            : m_baseUrl;
+        if (!baseUrl.isEmpty()) {
+            m_currentClient->setBaseUrl(baseUrl);
         }
-        m_currentClient->setModel(m_model);
+        const QString model = m_model.isEmpty()
+            ? ApiDefaults::defaultModelForBackend(key)
+            : m_model;
+        if (!model.isEmpty()) {
+            m_currentClient->setModel(model);
+        }
 
         connect(m_currentClient, &OcrInterface::recognitionFinished,
                 this, &OcrManager::recognitionFinished);
@@ -82,7 +109,11 @@ void OcrManager::setBaseUrl(const QString &url)
 {
     m_baseUrl = url;
     if (m_currentClient) {
-        m_currentClient->setBaseUrl(url);
+        QString effectiveUrl = url;
+        if (effectiveUrl.isEmpty()) {
+            effectiveUrl = ApiDefaults::defaultBaseUrlForBackend(backendKey(m_backend));
+        }
+        m_currentClient->setBaseUrl(effectiveUrl);
     }
 }
 
@@ -90,7 +121,11 @@ void OcrManager::setModel(const QString &model)
 {
     m_model = model;
     if (m_currentClient) {
-        m_currentClient->setModel(model);
+        QString effectiveModel = model;
+        if (effectiveModel.isEmpty()) {
+            effectiveModel = ApiDefaults::defaultModelForBackend(backendKey(m_backend));
+        }
+        m_currentClient->setModel(effectiveModel);
     }
 }
 

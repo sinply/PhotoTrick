@@ -1,5 +1,6 @@
 #include "ProcessingPanel.h"
 #include "ApiConfigWidget.h"
+#include "../ocr/ApiDefaults.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -184,8 +185,19 @@ void ProcessingPanel::onBackendChanged(int index)
     m_comboModel->setEnabled(backend != "paddle_local");
 
     if (backend == "claude_format" || backend == "openai_format") {
-        m_comboModel->addItem("deepseek-chat");
-        m_comboModel->addItem("glm-4v");
+        QStringList models;
+        for (const ApiProviderConfig &provider : ApiDefaults::providersForBackend(backend)) {
+            for (const QString &model : provider.models) {
+                if (!models.contains(model)) {
+                    models.append(model);
+                    m_comboModel->addItem(model);
+                }
+            }
+        }
+        const QString defaultModel = ApiDefaults::defaultModelForBackend(backend);
+        if (!defaultModel.isEmpty()) {
+            m_comboModel->setCurrentText(defaultModel);
+        }
     }
 
     // Emit signal for MainWindow to handle OCR server auto-start

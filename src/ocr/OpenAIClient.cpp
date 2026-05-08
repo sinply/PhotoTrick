@@ -1,4 +1,5 @@
 #include "OpenAIClient.h"
+#include "ApiDefaults.h"
 #include "../utils/OcrParser.h"
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -6,36 +7,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QBuffer>
-#include <QRegularExpression>
-
-namespace {
-
-QString buildChatCompletionsUrl(QString baseUrl)
-{
-    baseUrl = baseUrl.trimmed();
-    while (baseUrl.endsWith('/')) {
-        baseUrl.chop(1);
-    }
-
-    if (baseUrl.endsWith(QStringLiteral("/chat/completions"))) {
-        return baseUrl;
-    }
-
-    const QRegularExpression versionSuffix(QStringLiteral(R"(/v\d+$)"));
-    if (versionSuffix.match(baseUrl).hasMatch()) {
-        return baseUrl + QStringLiteral("/chat/completions");
-    }
-
-    return baseUrl + QStringLiteral("/v1/chat/completions");
-}
-
-}
 
 OpenAIClient::OpenAIClient(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
-    , m_baseUrl("https://api.deepseek.com")
-    , m_model("deepseek-chat")
+    , m_baseUrl(ApiDefaults::defaultBaseUrlForBackend(QStringLiteral("openai_format")))
+    , m_model(ApiDefaults::defaultModelForBackend(QStringLiteral("openai_format")))
 {
 }
 
@@ -117,7 +94,7 @@ void OpenAIClient::sendRequest()
     requestBody["messages"] = messages;
 
     // Send request
-    const QString url = buildChatCompletionsUrl(m_baseUrl);
+    const QString url = ApiDefaults::buildChatCompletionsUrl(m_baseUrl);
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(m_apiKey).toUtf8());

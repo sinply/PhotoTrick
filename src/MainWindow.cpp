@@ -8,6 +8,7 @@
 #include "core/OcrManager.h"
 #include "core/ConfigManager.h"
 #include "core/FileConverter.h"
+#include "ocr/ApiDefaults.h"
 #include "processors/InvoiceRecognizer.h"
 #include "processors/TableExtractor.h"
 #include "processors/ItineraryRecognizer.h"
@@ -982,6 +983,20 @@ void MainWindow::loadApiSettingsForBackend(const QString &backend)
     if (apiKey.isEmpty()) apiKey = cfg->apiKey();
     if (baseUrl.isEmpty()) baseUrl = cfg->baseUrl();
     if (model.isEmpty()) model = cfg->model();
+
+    if (backend == QStringLiteral("claude_format")) {
+        const QString normalizedBaseUrl = baseUrl.trimmed();
+        if (normalizedBaseUrl == QStringLiteral("https://api.deepseek.com")
+            || normalizedBaseUrl == QStringLiteral("https://api.deepseek.com/v1")) {
+            baseUrl = ApiDefaults::defaultBaseUrlForBackend(backend);
+        }
+        if (model == QStringLiteral("glm-4v")) {
+            model = ApiDefaults::defaultModelForBackend(backend);
+        }
+    }
+
+    if (baseUrl.isEmpty()) baseUrl = ApiDefaults::defaultBaseUrlForBackend(backend);
+    if (model.isEmpty()) model = ApiDefaults::defaultModelForBackend(backend);
 
     // Always update UI (even if empty, to clear previous values)
     m_processingPanel->setApiKey(apiKey);

@@ -90,6 +90,8 @@ set(OCR_SOURCES
     src/ocr/OcrInterface.h
     src/ocr/OcrServerManager.cpp
     src/ocr/OcrServerManager.h
+    src/ocr/ApiDefaults.cpp
+    src/ocr/ApiDefaults.h
     src/ocr/PaddleOcr.cpp
     src/ocr/PaddleOcr.h
     src/ocr/ClaudeClient.cpp
@@ -144,6 +146,16 @@ target_link_libraries(PhotoTrick PRIVATE
     Qt6::Network
     Qt6::Concurrent
 )
+
+enable_testing()
+
+add_executable(ApiDefaultsTest
+    tests/ApiDefaultsTest.cpp
+    src/ocr/ApiDefaults.cpp
+    src/ocr/ApiDefaults.h
+)
+target_link_libraries(ApiDefaultsTest PRIVATE Qt6::Core)
+add_test(NAME ApiDefaultsTest COMMAND ApiDefaultsTest)
 
 # Windows deployment
 if(WIN32)
