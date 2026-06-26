@@ -58,6 +58,10 @@ bool CsvExporter::exportInvoices(const QString &filePath, const QList<InvoiceDat
         out << row.join(",") << "\n";
     }
 
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -94,14 +98,20 @@ bool CsvExporter::exportTable(const QString &filePath, const TableData &table)
         out << escapedRow.join(",") << "\n";
     }
 
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
 
 QString CsvExporter::escapeCsvField(const QString &field)
 {
-    if (field.contains(',') || field.contains('"') || field.contains('\n')) {
+    if (field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r')) {
         QString escaped = field;
+        escaped.replace("\r\n", "\n");
+        escaped.replace('\r', ' ');
         escaped.replace("\"", "\"\"");
         return "\"" + escaped + "\"";
     }

@@ -11,14 +11,19 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QMutex>
+#include <QMutexLocker>
 #include <functional>
 #include <algorithm>
 
 namespace {
 QFile* debugLogFile = nullptr;
+// parseInvoiceData 可能在 QtConcurrent 线程并发调用，日志文件写入需加锁，否则交错损坏
+QMutex s_logMutex;
 
 void debugLog(const QString &message)
 {
+    QMutexLocker locker(&s_logMutex);
     qDebug() << message;
 
     if (!debugLogFile) {
@@ -34,6 +39,20 @@ void debugLog(const QString &message)
         stream << QDateTime::currentDateTime().toString("hh:mm:ss") << " " << message << "\n";
         stream.flush();
     }
+}
+
+// 合法税率集合：小规模 3%，一般纳税人 6/9/13%，减按征收 1.5/0.5%，
+// 以及 API 可能返回的小数形式 0.03/0.06/0.09/0.13
+const QList<double> &knownTaxRates() {
+    static const QList<double> rates = {0.0, 0.03, 0.06, 0.09, 0.13, 0.5, 1.5, 3.0, 6.0, 9.0, 13.0};
+    return rates;
+}
+bool isKnownTaxRate(double rate) {
+    if (rate < 0) return false;
+    for (double v : knownTaxRates()) {
+        if (qAbs(rate - v) < 0.01) return true;
+    }
+    return false;
 }
 
 // Shared non-invoice document keywords
@@ -80,7 +99,8 @@ const QStringList NON_INVOICE_KEYWORDS = {
     // 其他
     QStringLiteral("报销凭证"), QStringLiteral("保险单"),
     QStringLiteral("审批"), QStringLiteral("出差审批"),
-    QStringLiteral("航班"),  // FLIGHT too generic
+    // "航班"已移除：航司开具的发票常含"航班"二字会被误杀；
+    // 行程单检测由"航班号""登机牌""电子客票"等更具体的词覆盖
     // 费用报告/报销单
     QStringLiteral("费用报告"), QStringLiteral("EXPENSE REPORT"),
     QStringLiteral("报销单"), QStringLiteral("EXPENSE CLAIM"),
@@ -271,10 +291,12 @@ static double extractTaxRateFromText(const QString &rawText)
         bool ok = false;
         double v = mr.captured(1).toDouble(&ok);
         if (ok) {
-            // %9 is almost always a misread of 6% (OCR confuses 6 and 9 visually)
+            // %9 可能是 OCR 把 "6%" 读反（6/9 视觉混淆 + 位置颠倒），
+            // 也可能是真 9% 票 OCR 把 "9%" 读反成 "%9"。不再硬编码改成 6%，
+            // 保留原值 9，交由 validateAndReconcile 用 税额/不含税 金额交叉校验纠正。
             if (qAbs(v - 9.0) < 0.01) {
-                debugLog(QString("  Found reversed %9, correcting to 6%% (OCR 6/9 confusion)"));
-                return 6.0;
+                debugLog(QString("  Found reversed %9, keeping 9%% (will cross-check with amounts)"));
+                return 9.0;
             }
             // Other values like %6, %3, %13 are valid as-is
             if (isValidTaxRate(v)) {
@@ -387,34 +409,88 @@ double extractAmountWithoutTaxFromTable(const QString &rawText)
 
 void reconcileAmounts(InvoiceData &invoice)
 {
-    // Derive totalAmount from other amounts
+    // 三值一致性校验：价税合计 = 不含税 + 税额
+    // 三者都有却不自洽时（OCR 常把税额/不含税/合计读混或互换），
+    // 按大小重排：合计最大、税额最小、不含税居中，并用推算税率合法性确认。
+    if (invoice.totalAmount > 0 && invoice.amountWithoutTax > 0 && invoice.taxAmount > 0) {
+        const double sum = invoice.amountWithoutTax + invoice.taxAmount;
+        const double tol = qMax(0.01, sum * 0.01); // 1% 容差或至少 1 分钱
+        if (qAbs(invoice.totalAmount - sum) > tol) {
+            QList<double> vals;
+            vals << invoice.totalAmount << invoice.amountWithoutTax << invoice.taxAmount;
+            std::sort(vals.begin(), vals.end());
+            const double smallest = vals[0];
+            const double middle = vals[1];
+            const double largest = vals[2];
+            if (middle > 0) {
+                const double impliedRate = smallest / middle * 100.0;
+                if (isKnownTaxRate(impliedRate)) {
+                    debugLog(QString("  Amounts inconsistent (total=%1, withoutTax=%2, tax=%3); "
+                                     "rearranging by magnitude (implied rate %4%)")
+                        .arg(invoice.totalAmount, 0, 'f', 2)
+                        .arg(invoice.amountWithoutTax, 0, 'f', 2)
+                        .arg(invoice.taxAmount, 0, 'f', 2)
+                        .arg(impliedRate, 0, 'f', 2));
+                    invoice.taxAmount = smallest;
+                    invoice.amountWithoutTax = middle;
+                    invoice.totalAmount = largest;
+                    if (invoice.taxRate <= 0) {
+                        invoice.taxRate = impliedRate;
+                    }
+                } else {
+                    debugLog(QString("  WARNING: amounts inconsistent and rearrangement implies "
+                                     "invalid rate %1%; leaving values as-is")
+                        .arg(impliedRate, 0, 'f', 2));
+                }
+            }
+        }
+    }
+
+    // 补缺失值
     if (invoice.totalAmount <= 0.0 && invoice.amountWithoutTax > 0.0 && invoice.taxAmount > 0.0) {
         invoice.totalAmount = invoice.amountWithoutTax + invoice.taxAmount;
     }
-
-    // Derive amountWithoutTax from total and tax
     if (invoice.amountWithoutTax <= 0.0 && invoice.totalAmount > 0.0 && invoice.taxAmount > 0.0
         && invoice.totalAmount >= invoice.taxAmount) {
         invoice.amountWithoutTax = invoice.totalAmount - invoice.taxAmount;
     }
-
-    // Derive taxAmount from total and amount without tax
     if (invoice.taxAmount <= 0.0 && invoice.totalAmount > 0.0 && invoice.amountWithoutTax > 0.0
         && invoice.totalAmount >= invoice.amountWithoutTax) {
         invoice.taxAmount = invoice.totalAmount - invoice.amountWithoutTax;
     }
 
-    // Derive taxRate from tax amount and base amount
+    // 税率与金额交叉校验：用 税额/不含税 推算实际税率，纠正 OCR 误读（如 %9 被读成 9%
+    // 但金额实际是 6%）。仅当推算税率落在合法集合时才纠正。
+    if (invoice.taxAmount > 0.0 && invoice.amountWithoutTax > 0.0) {
+        const double actualRate = invoice.taxAmount / invoice.amountWithoutTax * 100.0;
+        if (isKnownTaxRate(actualRate)) {
+            if (invoice.taxRate <= 0.0 || qAbs(invoice.taxRate - actualRate) > 0.5) {
+                if (invoice.taxRate > 0.0) {
+                    debugLog(QString("  Tax rate %1% doesn't match amounts; correcting to %2% "
+                                     "(from tax/withoutTax)")
+                        .arg(invoice.taxRate, 0, 'f', 2).arg(actualRate, 0, 'f', 2));
+                }
+                invoice.taxRate = actualRate;
+            }
+        }
+    }
+
+    // 税率缺失时用金额反推
     if (invoice.taxRate <= 0.0 && invoice.taxAmount > 0.0 && invoice.amountWithoutTax > 0.0) {
-        invoice.taxRate = (invoice.taxAmount / invoice.amountWithoutTax) * 100.0;
+        const double r = invoice.taxAmount / invoice.amountWithoutTax * 100.0;
+        if (isKnownTaxRate(r)) {
+            invoice.taxRate = r;
+        }
     }
 
-    // Normalize tax rate (if < 1, assume it's decimal form)
+    // 税率小数归一化：仅当乘 100 后落在合法税率集合才转，避免 0.5% 被误乘成 50%
     if (invoice.taxRate > 0.0 && invoice.taxRate <= 1.0) {
-        invoice.taxRate *= 100.0;
+        const double asPercent = invoice.taxRate * 100.0;
+        if (isKnownTaxRate(asPercent)) {
+            invoice.taxRate = asPercent;
+        }
     }
 
-    // Validate tax rate range
     if (invoice.taxRate > 100.0 || invoice.taxRate < 0.0) {
         invoice.taxRate = 0.0;
     }
@@ -660,7 +736,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         if (invoice.taxAmount <= 0) {
             invoice.taxAmount = OcrParser::extractLabeledAmount(rawText, {
                 QStringLiteral("税额"), QStringLiteral("税金")
-            });
+            }, {}, true);  // 税额通常比合计小，同分时选小值
         }
         debugLog(QString("Tax amount result: %1").arg(invoice.taxAmount));
 
@@ -670,7 +746,7 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
         if (invoice.amountWithoutTax <= 0) {
             invoice.amountWithoutTax = OcrParser::extractLabeledAmount(rawText, {
                 QStringLiteral("不含税"), QStringLiteral("金额合计"), QStringLiteral("净额")
-            });
+            }, {}, true);  // 不含税比价税合计小，同分时选小值
         }
         debugLog(QString("Amount without tax result: %1").arg(invoice.amountWithoutTax));
 
@@ -1022,14 +1098,14 @@ InvoiceData InvoiceRecognizer::parseInvoiceData(const QJsonObject &json)
     if (invoice.amountWithoutTax == 0.0) {
         invoice.amountWithoutTax = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("不含税"), QStringLiteral("金额合计"), QStringLiteral("净额")
-        });
+        }, {}, true);  // 不含税比价税合计小，同分时选小值
     }
 
     invoice.taxAmount = findNumber({"taxAmount", "tax", "taxTotal", "税额"});
     if (invoice.taxAmount == 0.0) {
         invoice.taxAmount = OcrParser::extractLabeledAmount(rawText, {
             QStringLiteral("税额"), QStringLiteral("税金")
-        });
+        }, {}, true);  // 税额通常比合计小，同分时选小值
     }
 
     invoice.taxRate = findNumber({"taxRate", "rate", "税率"});

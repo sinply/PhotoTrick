@@ -5,6 +5,7 @@
 #include "OcrServerManager.h"
 #include <QNetworkAccessManager>
 #include <QBuffer>
+#include <QPointer>
 
 class PaddleOcr : public OcrInterface
 {
@@ -16,6 +17,7 @@ public:
     void setBaseUrl(const QString &url) override;
     void recognize(const QImage &image, const QString &prompt) override;
     bool isReady() const override;
+    void cancel() override;
 
     // Server management
     void setServerPath(const QString &pythonPath, const QString &scriptPath);
@@ -36,6 +38,7 @@ private:
     OcrServerManager *m_serverManager;
     QString m_serverUrl;
     QBuffer m_buffer;
+    QPointer<QNetworkReply> m_currentReply;
 };
 
 #endif // PADDLEOCR_H

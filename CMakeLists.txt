@@ -126,11 +126,12 @@ qt_add_executable(PhotoTrick WIN32
     ${UI_SOURCES}
 )
 
-# Windows icon
-if(WIN32)
-    set(APP_ICON_RESOURCE_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc")
-    target_sources(PhotoTrick PRIVATE ${APP_ICON_RESOURCE_WINDOWS})
-endif()
+# Windows icon - 暂时禁用：msys2 windres 预处理反斜杠路径时被吞，
+# 导致 cc1 找不到 app.rc。阶段三改用 qrc 嵌图标或切换到 MinGW 自带 windres 修复。
+# if(WIN32)
+#     set(APP_ICON_RESOURCE_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc")
+#     target_sources(PhotoTrick PRIVATE ${APP_ICON_RESOURCE_WINDOWS})
+# endif()
 
 target_include_directories(PhotoTrick PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

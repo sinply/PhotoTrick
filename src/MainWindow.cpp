@@ -30,6 +30,7 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QDir>
+#include <QStandardPaths>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -185,12 +186,11 @@ void MainWindow::setupConnections()
     });
 
     connect(m_processingPanel, &ProcessingPanel::startProcessing, this, &MainWindow::onProcessingStarted);
-    connect(m_processingPanel, &ProcessingPanel::cancelProcessing, this, [this]() {
-        m_isProcessing = false;
-        m_pendingFiles.clear();
-        m_statusLabel->setText(tr("已取消"));
-        m_progressBar->hide();
-    });
+    connect(m_processingPanel, &ProcessingPanel::cancelProcessing, this, &MainWindow::onCancelProcessing);
+
+    // File converter (async) signals
+    connect(m_fileConverter, &FileConverter::conversionFinished, this, &MainWindow::onFileConverted);
+    connect(m_fileConverter, &FileConverter::conversionError, this, &MainWindow::onFileConvertFailed);
 
     // Connect backend change signal
     connect(m_processingPanel, &ProcessingPanel::backendChanged, this, &MainWindow::onOcrBackendChanged);
@@ -318,6 +318,12 @@ void MainWindow::onProcessingStarted()
 
     m_isProcessing = true;
     m_currentFileIndex = 0;
+    m_totalSteps = m_pendingFiles.size();
+    m_completedSteps = 0;
+
+    // 处理中禁用文件列表操作和开始按钮
+    if (m_fileListView) m_fileListView->setProcessing(true);
+    if (m_processingPanel) m_processingPanel->setProcessing(true);
 
     // Reset batch result table
     resetBatchResultTable();
@@ -388,64 +394,41 @@ void MainWindow::processNextFile()
     QStringList imageFormats = {"jpg", "jpeg", "png", "bmp", "gif", "tiff", "webp"};
 
     QImage image;
-    bool loaded = false;
 
     if (imageFormats.contains(ext)) {
         // Direct image loading
         m_processingPanel->appendLog(tr("  加载图片..."));
         QImageReader reader(filePath);
+        reader.setAutoTransform(true);  // 按 EXIF 方向自动旋转（手机拍摄的照片）
         image = reader.read();
-        loaded = !image.isNull();
-        if (!loaded) {
+        if (image.isNull()) {
             QString error = tr("无法读取图片: %1 - %2").arg(filePath).arg(reader.errorString());
             qWarning() << "MainWindow:" << error;
             onProcessingError(error);
             return;
         }
         m_processingPanel->appendLog(tr("  图片尺寸: %1x%2").arg(image.width()).arg(image.height()));
-    } else {
-        // Use FileConverter for PDF, OFD, DOCX, XLSX, HEIC
-        m_processingPanel->appendLog(tr("  转换文件格式 (%1)...").arg(ext.toUpper()));
-        m_statusLabel->setText(tr("转换中: %1 (%2/%3)")
-            .arg(fileName)
-            .arg(m_currentFileIndex + 1)
-            .arg(m_pendingFiles.size()));
-
-        // Check if format is supported by converter
-        QStringList convertibleFormats = {"pdf", "ofd", "docx", "xlsx", "heic"};
-        if (!convertibleFormats.contains(ext)) {
-            skipCurrentFile(tr("不支持的文件格式: %1").arg(ext.toUpper()));
-            return;
-        }
-
-        QList<QImage> images = m_fileConverter->convertToImages(filePath);
-
-        if (images.isEmpty()) {
-            skipCurrentFile(tr("格式转换失败，请检查文件是否损坏或转换为PNG/JPG后重试"));
-            return;
-        }
-
-        if (images.size() == 1) {
-            image = images.first();
-            loaded = true;
-        } else {
-            // Multi-page document: queue extra pages for processing
-            image = images.first();
-            loaded = true;
-            m_processingPanel->appendLog(tr("  转换完成，共 %1 页，处理第1页").arg(images.size()));
-            for (int i = 1; i < images.size(); ++i) {
-                m_pendingExtraPages.append({filePath, i + 1, images[i]});
-            }
-        }
-        qDebug() << "MainWindow: Converted" << filePath << "to" << images.size() << "image(s)";
-    }
-
-    if (!loaded || image.isNull()) {
-        onProcessingError(tr("无法加载图片: %1").arg(filePath));
+        processImage(image);
         return;
     }
 
-    processImage(image);
+    // Document formats (PDF/OFD/DOCX/XLSX/HEIC): convert asynchronously so UI stays responsive
+    QStringList convertibleFormats = {"pdf", "ofd", "docx", "xlsx", "heic"};
+    if (!convertibleFormats.contains(ext)) {
+        skipCurrentFile(tr("不支持的文件格式: %1").arg(ext.toUpper()));
+        return;
+    }
+
+    m_processingPanel->appendLog(tr("  转换文件格式 (%1)...").arg(ext.toUpper()));
+    m_statusLabel->setText(tr("转换中: %1 (%2/%3)")
+        .arg(fileName)
+        .arg(m_currentFileIndex + 1)
+        .arg(m_pendingFiles.size()));
+
+    if (!m_fileConverter->requestConvert(filePath)) {
+        skipCurrentFile(tr("无法启动格式转换"));
+    }
+    // 转换异步进行，结果通过 onFileConverted/onFileConvertFailed 回调
 }
 
 void MainWindow::processImage(const QImage &image)
@@ -485,6 +468,12 @@ void MainWindow::processImage(const QImage &image)
 
 void MainWindow::advanceToNextFile()
 {
+    if (!m_isProcessing) {
+        return;  // 已取消，不再推进
+    }
+    // 完成一个文件/页，推进进度
+    m_completedSteps++;
+    updateProgress();
     // If there are extra pages from multi-page documents, process them first
     if (!m_pendingExtraPages.isEmpty()) {
         processNextFile();  // will pick up from m_pendingExtraPages
@@ -494,11 +483,96 @@ void MainWindow::advanceToNextFile()
     processNextFile();
 }
 
+void MainWindow::updateProgress()
+{
+    if (m_totalSteps > 0) {
+        int pct = static_cast<int>(100.0 * m_completedSteps / m_totalSteps);
+        m_progressBar->setValue(qBound(0, pct, 100));
+    }
+}
+
+void MainWindow::onFileConverted(const QString &filePath, const QList<QImage> &images)
+{
+    if (!m_isProcessing) {
+        return;  // 取消后迟到的回调，丢弃
+    }
+
+    if (m_currentFileIndex >= m_pendingFiles.size() || m_pendingFiles[m_currentFileIndex] != filePath) {
+        qDebug() << "MainWindow: stale conversion result for" << filePath << ", ignoring";
+        return;
+    }
+
+    if (images.isEmpty()) {
+        onFileConvertFailed(filePath, tr("转换未产生图片"));
+        return;
+    }
+
+    // 多页内存保护：超过上限的页丢弃，避免大 PDF 占满内存
+    const int kMaxPages = 50;
+    QList<QImage> pages = images;
+    if (pages.size() > kMaxPages) {
+        m_processingPanel->appendLog(tr("  文档共 %1 页，超过上限 %2，仅处理前 %2 页")
+            .arg(pages.size()).arg(kMaxPages));
+        pages = pages.mid(0, kMaxPages);
+    }
+
+    QImage first = pages.first();
+    if (pages.size() > 1) {
+        m_processingPanel->appendLog(tr("  转换完成，共 %1 页，处理第1页").arg(pages.size()));
+        for (int i = 1; i < pages.size(); ++i) {
+            m_pendingExtraPages.append({filePath, i + 1, pages[i]});
+        }
+        // 多页文档：总步骤数追加额外页，进度条按页推进
+        m_totalSteps += pages.size() - 1;
+    } else {
+        m_processingPanel->appendLog(tr("  转换完成"));
+    }
+    qDebug() << "MainWindow: Converted" << filePath << "to" << pages.size() << "image(s)";
+
+    processImage(first);
+}
+
+void MainWindow::onFileConvertFailed(const QString &filePath, const QString &error)
+{
+    if (!m_isProcessing) {
+        return;
+    }
+    if (m_currentFileIndex < m_pendingFiles.size() && m_pendingFiles[m_currentFileIndex] == filePath) {
+        skipCurrentFile(error);
+    } else {
+        qDebug() << "MainWindow: stale conversion error for" << filePath << ", ignoring";
+    }
+}
+
+void MainWindow::onCancelProcessing()
+{
+    m_isProcessing = false;
+
+    if (m_fileConverter) {
+        m_fileConverter->cancel();
+    }
+    if (m_ocrManager) {
+        m_ocrManager->cancelCurrent();
+    }
+
+    if (m_fileListView) m_fileListView->setProcessing(false);
+    if (m_processingPanel) m_processingPanel->setProcessing(false);
+
+    m_pendingFiles.clear();
+    m_pendingExtraPages.clear();
+    m_currentPageNumber = 1;
+    m_statusLabel->setText(tr("已取消"));
+    m_progressBar->hide();
+    m_processingPanel->appendLog(tr("已取消处理"));
+}
+
 void MainWindow::onProcessingFinished()
 {
     m_isProcessing = false;
     m_pendingFiles.clear();
     m_pendingExtraPages.clear();
+    if (m_fileListView) m_fileListView->setProcessing(false);
+    if (m_processingPanel) m_processingPanel->setProcessing(false);
     m_statusLabel->setText(tr("处理完成"));
     m_progressBar->setValue(100);
 
@@ -577,8 +651,7 @@ void MainWindow::onInvoiceRecognized(const InvoiceData &invoice)
              << "Category:" << inv.categoryString()
              << "IsValid:" << inv.isValidInvoice;
 
-    // Update progress
-    m_progressBar->setValue(static_cast<int>(100.0 * (m_currentFileIndex + 1) / m_pendingFiles.size()));
+    // 进度由 advanceToNextFile 统一更新
 
     QString currentFile = inv.sourceFile;
     QString fileName = QFileInfo(currentFile).fileName();
@@ -652,8 +725,7 @@ void MainWindow::onTableExtracted(const TableData &table)
 {
     qDebug() << "MainWindow: Table extracted - Rows:" << table.rows.size();
 
-    // Update progress
-    m_progressBar->setValue(static_cast<int>(100.0 * (m_currentFileIndex + 1) / m_pendingFiles.size()));
+    // 进度由 advanceToNextFile 统一更新
 
     // 记录提取结果
     if (table.rows.isEmpty() && table.headers.isEmpty()) {
@@ -739,8 +811,7 @@ void MainWindow::onItineraryRecognized(const ItineraryData &itinerary)
     qDebug() << "MainWindow: Itinerary recognized - " << iti.flightTrainNo
              << "Route:" << iti.departure << "->" << iti.destination;
 
-    // Update progress
-    m_progressBar->setValue(static_cast<int>(100.0 * (m_currentFileIndex + 1) / m_pendingFiles.size()));
+    // 进度由 advanceToNextFile 统一更新
 
     // 记录识别结果
     const bool hasCoreData = !iti.flightTrainNo.trimmed().isEmpty()
@@ -791,13 +862,9 @@ void MainWindow::onProcessingError(const QString &error)
 
     m_statusLabel->setText(tr("错误: %1").arg(error.left(50)));
 
-    // 记录错误
+    // 记录错误（批量处理时不弹模态框，避免连续错误刷屏，继续下一个文件）
     m_processingPanel->appendLog(tr("  错误: %1").arg(error));
 
-    // Show error to user
-    QMessageBox::warning(this, tr("处理错误"), error);
-
-    // Continue with next file
     advanceToNextFile();
 }
 
@@ -994,7 +1061,12 @@ void MainWindow::writeBatchSummaryFile()
         return;  // Nothing to report
     }
 
-    QString reportPath = QDir::currentPath() + "/处理报告_" +
+    // 优先写到文档目录，避免 currentPath 不可写（如安装到 Program Files 或从快捷方式启动）
+    QString reportDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (reportDir.isEmpty() || !QDir(reportDir).exists()) {
+        reportDir = QDir::currentPath();
+    }
+    QString reportPath = reportDir + "/处理报告_" +
         QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss") + ".md";
 
     QFile file(reportPath);

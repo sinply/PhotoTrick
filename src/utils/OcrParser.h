@@ -40,9 +40,12 @@ double parseNumber(const QJsonValue &value);
 // Extract an amount from raw text using label-based scoring
 // positiveLabels: labels that indicate the target amount
 // negativeLabels: labels that indicate non-amount numbers (optional)
+// preferSmaller: when scores tie, prefer smaller value (for tax/amount-without-tax
+//                which are smaller than the total; default false prefers larger for totals)
 double extractLabeledAmount(const QString &rawText,
                             const QStringList &positiveLabels,
-                            const QStringList &negativeLabels = {});
+                            const QStringList &negativeLabels = {},
+                            bool preferSmaller = false);
 
 } // namespace OcrParser
 

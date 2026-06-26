@@ -124,6 +124,13 @@ void OcrManager::recognizeImages(const QList<QImage> &images, const QString &pro
     emit progress(100);
 }
 
+void OcrManager::cancelCurrent()
+{
+    if (m_currentClient) {
+        m_currentClient->cancel();
+    }
+}
+
 PaddleOcr* OcrManager::paddleOcrClient() const
 {
     if (m_backend == PaddleOCR_Local) {

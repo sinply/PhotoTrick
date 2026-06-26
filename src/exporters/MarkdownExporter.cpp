@@ -3,6 +3,16 @@
 #include <QTextStream>
 #include <QDate>
 
+// 转义 Markdown 表格单元格：| 会破坏列结构，换行会破坏行结构
+static QString escapeMarkdownCell(const QString &cell)
+{
+    QString s = cell;
+    s.replace('|', QStringLiteral("\\|"));
+    s.replace('\r', ' ');
+    s.replace('\n', ' ');
+    return s;
+}
+
 MarkdownExporter::MarkdownExporter(QObject *parent)
     : QObject(parent)
 {
@@ -78,6 +88,10 @@ bool MarkdownExporter::exportInvoices(const QString &filePath, const QList<Invoi
         }
     }
 
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -90,13 +104,13 @@ QString MarkdownExporter::formatInvoiceTable(const QList<InvoiceData> &invoices)
 
     for (const auto &invoice : invoices) {
         result += QString("| %1 | %2 | ¥%3 | ¥%4 | %5% | %6 | %7 |\n")
-                     .arg(invoice.invoiceNumber)
+                     .arg(escapeMarkdownCell(invoice.invoiceNumber))
                      .arg(InvoiceClassifier::categoryToString(invoice.category))
                      .arg(invoice.totalAmount, 0, 'f', 2)
                      .arg(invoice.taxAmount, 0, 'f', 2)
                      .arg(invoice.taxRate, 0, 'f', 0)
                      .arg(invoice.invoiceDate.toString("yyyy-MM-dd"))
-                     .arg(invoice.sellerName);
+                     .arg(escapeMarkdownCell(invoice.sellerName));
     }
 
     return result;
@@ -149,6 +163,10 @@ bool MarkdownExporter::exportTable(const QString &filePath, const TableData &tab
 
     out << formatTable(table);
 
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -177,6 +195,10 @@ bool MarkdownExporter::exportTables(const QString &filePath, const QList<TableDa
         index++;
     }
 
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -189,7 +211,7 @@ QString MarkdownExporter::formatTable(const TableData &table)
     if (!table.headers.isEmpty()) {
         result += "|";
         for (const auto &header : table.headers) {
-            result += QString(" %1 |").arg(header);
+            result += QString(" %1 |").arg(escapeMarkdownCell(header));
         }
         result += "\n|";
         for (int i = 0; i < table.headers.size(); ++i) {
@@ -202,7 +224,7 @@ QString MarkdownExporter::formatTable(const TableData &table)
     for (const auto &row : table.rows) {
         result += "|";
         for (const auto &cell : row) {
-            result += QString(" %1 |").arg(cell.text);
+            result += QString(" %1 |").arg(escapeMarkdownCell(cell.text));
         }
         result += "\n";
     }

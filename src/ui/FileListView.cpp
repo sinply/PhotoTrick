@@ -99,8 +99,9 @@ void FileListView::addFiles(const QStringList &files)
 {
     int addedCount = 0;
     for (const QString &file : files) {
-        if (isFileSupported(file) && !m_filePaths.values().contains(file)) {
+        if (isFileSupported(file) && !m_fileSet.contains(file)) {
             addFileItem(file);
+            m_fileSet.insert(file);
             addedCount++;
             // Add to recent files
             ConfigManager::instance()->addRecentFile(file);
@@ -124,17 +125,32 @@ void FileListView::addFolder(const QString &folder)
 
     QStringList files;
     QDirIterator it(folder, filters, QDir::Files, QDirIterator::Subdirectories);
+    const int kMaxFiles = 5000;
     while (it.hasNext()) {
         files << it.next();
+        if (files.size() >= kMaxFiles) break;
+    }
+    if (files.size() >= kMaxFiles) {
+        QMessageBox::warning(this, tr("提示"),
+            tr("文件数超过 %1，仅添加前 %1 个").arg(kMaxFiles));
     }
 
     addFiles(files);
+}
+
+void FileListView::setProcessing(bool processing)
+{
+    if (m_btnAddFiles) m_btnAddFiles->setEnabled(!processing);
+    if (m_btnAddFolder) m_btnAddFolder->setEnabled(!processing);
+    if (m_btnRemove) m_btnRemove->setEnabled(!processing);
+    if (m_btnClear) m_btnClear->setEnabled(!processing);
 }
 
 void FileListView::clearFiles()
 {
     m_listWidget->clear();
     m_filePaths.clear();
+    m_fileSet.clear();
     m_labelCount->setText(tr("共 0 个文件"));
 }
 
@@ -154,6 +170,7 @@ void FileListView::onRemoveSelected()
     for (QListWidgetItem *item : selected) {
         QString filePath = item->data(Qt::UserRole).toString();
         m_filePaths.remove(filePath);  // Use full path as key
+        m_fileSet.remove(filePath);
         emit fileRemoved(filePath);
         delete item;
     }

@@ -105,17 +105,30 @@ void ClaudeClient::sendRequest()
         request,
         QJsonDocument(requestBody).toJson()
     );
+    m_currentReply = reply;
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleResponse(reply);
     });
 }
 
+void ClaudeClient::cancel()
+{
+    if (m_currentReply) {
+        m_currentReply->abort();
+        m_currentReply.clear();
+    }
+}
+
 void ClaudeClient::handleResponse(QNetworkReply *reply)
 {
     reply->deleteLater();
+    m_currentReply.clear();
 
     if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() == QNetworkReply::OperationCanceledError) {
+            return;  // 用户取消，静默不报错
+        }
         if (shouldRetry("ClaudeClient:")) {
             sendRequest();
         } else {

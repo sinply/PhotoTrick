@@ -31,6 +31,9 @@ public:
     void recognizeImage(const QImage &image, const QString &prompt);
     void recognizeImages(const QList<QImage> &images, const QString &prompt);
 
+    // 中断当前正在进行的 OCR 请求（用于取消处理）
+    void cancelCurrent();
+
     PaddleOcr* paddleOcrClient() const;
 
 signals:

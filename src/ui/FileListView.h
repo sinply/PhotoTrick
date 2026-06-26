@@ -6,6 +6,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QMap>
+#include <QSet>
 #include <QMenu>
 
 class FileListView : public QWidget
@@ -22,6 +23,9 @@ public:
     QStringList getFiles() const;
     void loadRecentFiles();
     void saveRecentFiles();
+
+    // 处理中禁用所有添加/删除/清空按钮，防止列表被改动
+    void setProcessing(bool processing);
 
 signals:
     void filesAdded(int count);
@@ -51,6 +55,7 @@ private:
     QMenu *m_recentMenu;
 
     QMap<QString, QString> m_filePaths; // display name -> full path
+    QSet<QString> m_fileSet;            // 用于 O(1) 去重
 };
 
 #endif // FILELISTVIEW_H

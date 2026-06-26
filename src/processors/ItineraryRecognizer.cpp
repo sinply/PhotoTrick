@@ -156,10 +156,12 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
             itinerary.flightTrainNo = match.captured(1);
         }
 
-        // Also try to find flight numbers like CA1234, MU5678 in text
-        QRegularExpression flightNumRe(QStringLiteral(R"(\b([A-Z]{2}\d{3,4})\b)"));
+        // 全文扫描航班号 CA1234/MU5678。用显式边界替代 \b：Qt 正则在 Unicode 模式下
+        // 把中文当 \w，导致 "航班CA1234" 中 \b 失效而漏匹配。
+        QRegularExpression flightNumRe(QStringLiteral(R"((?:^|[^A-Za-z0-9])([A-Z]{2}\d{3,4})(?![A-Za-z0-9]))"));
         match = flightNumRe.match(rawText);
-        if (match.hasMatch()) {
+        // 仅当标签方式未提取到时才用全文扫描结果，避免覆盖已识别的车次号
+        if (itinerary.flightTrainNo.isEmpty() && match.hasMatch()) {
             itinerary.flightTrainNo = match.captured(1);
         }
 
@@ -249,13 +251,19 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
                 + itinerary.fuelSurcharge + itinerary.airportTax + itinerary.insurance;
         }
 
-        // Determine type from content
-        if (rawText.contains(QStringLiteral("航班")) || rawText.contains(QStringLiteral("机票"))
-            || rawText.contains(QStringLiteral("CA")) || rawText.contains(QStringLiteral("MU"))
-            || rawText.contains(QStringLiteral("CZ")) || rawText.contains(QStringLiteral("HU"))) {
+        // Determine type from content.
+        // 用车次/航班号正则判断，避免裸 "CA"/"MU"/"G" 短串在英文文本中误中
+        // （如 "CA" 出现在英文公司名、"G" 出现在 "Gate"/"G1" 等）
+        QRegularExpression flightCodeRe(QStringLiteral(R"((?:^|[^A-Za-z0-9])([A-Z]{2}\d{3,4})(?![A-Za-z0-9]))"));
+        QRegularExpression trainCodeRe(QStringLiteral(R"((?:^|[^A-Za-z0-9])([GDKTZ]\d{1,4})(?![A-Za-z0-9]))"));
+        const bool hasFlightCode = flightCodeRe.match(rawText).hasMatch();
+        const bool hasTrainCode = trainCodeRe.match(rawText).hasMatch();
+        if (hasFlightCode || rawText.contains(QStringLiteral("航班"))
+            || rawText.contains(QStringLiteral("机票"))) {
             itinerary.type = ItineraryData::Flight;
             itinerary.typeString = QStringLiteral("机票");
-        } else if (rawText.contains(QStringLiteral("火车")) || rawText.contains(QStringLiteral("高铁"))
+        } else if (hasTrainCode || rawText.contains(QStringLiteral("火车"))
+                   || rawText.contains(QStringLiteral("高铁"))
                    || rawText.contains(QStringLiteral("车次"))) {
             itinerary.type = ItineraryData::Train;
             itinerary.typeString = QStringLiteral("火车票");
@@ -378,12 +386,30 @@ ItineraryData ItineraryRecognizer::parseItineraryData(const QJsonObject &json)
     }
 
     if (itinerary.type == ItineraryData::Other) {
-        const QString hint = rawText + "\n" + itinerary.flightTrainNo + "\n" + itinerary.typeString;
-        if (hint.contains(QStringLiteral("航班")) || hint.contains(QStringLiteral("MU")) || hint.contains(QStringLiteral("CA"))) {
+        // 用车次/航班号正则判断，避免裸 "G"/"CA" 短串在英文文本中误中
+        QRegularExpression flightCodeRe(QStringLiteral(R"([A-Z]{2}\d{3,4})"));
+        QRegularExpression trainCodeRe(QStringLiteral(R"([GDKTZ]\d{1,4})"));
+        const QString hint = rawText + "\n" + itinerary.flightTrainNo;
+        const bool hasFlight = flightCodeRe.match(itinerary.flightTrainNo).hasMatch()
+            || hint.contains(QStringLiteral("航班"));
+        const bool hasTrain = trainCodeRe.match(itinerary.flightTrainNo).hasMatch()
+            || hint.contains(QStringLiteral("车次"))
+            || hint.contains(QStringLiteral("高铁"));
+        if (hasFlight) {
             itinerary.type = ItineraryData::Flight;
-        } else if (hint.contains(QStringLiteral("车次")) || hint.contains(QStringLiteral("高铁")) || hint.contains(QStringLiteral("G"))) {
+        } else if (hasTrain) {
             itinerary.type = ItineraryData::Train;
         }
+    }
+
+    // 强发票标识：应分流到发票识别，不应作为行程单返回。
+    // 行程单可能标题含"票"（电子客票行程单），但不会含"增值税/价税合计/发票代码"。
+    if (rawText.contains(QStringLiteral("增值税"))
+        || rawText.contains(QStringLiteral("价税合计"))
+        || rawText.contains(QStringLiteral("发票代码"))) {
+        itinerary.isValidItinerary = false;
+        itinerary.invalidReason = QStringLiteral("检测到发票标识，应为发票而非行程单");
+        return itinerary;
     }
 
     itinerary.validate();

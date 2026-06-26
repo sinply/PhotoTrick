@@ -19,6 +19,9 @@ public:
     virtual void recognize(const QImage &image, const QString &prompt) = 0;
     virtual bool isReady() const = 0;
 
+    // 中断当前正在进行的请求（若有）。取消后不应再 emit recognitionError。
+    virtual void cancel() {}
+
     void setTimeout(int msec) { m_timeout = msec; }
     void setMaxRetries(int retries) { m_maxRetries = retries; }
 

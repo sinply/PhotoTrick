@@ -9,6 +9,7 @@ OCR Local Server
 import os
 import base64
 import io
+import threading
 import numpy as np
 from flask import Flask, request, jsonify
 from PIL import Image
@@ -22,8 +23,13 @@ except ImportError:
 
 app = Flask(__name__)
 
+# 限制单次请求体大小（防止超大图导致 OOM），约 20MB
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
+
 # 初始化OCR引擎
 ocr_engine = None
+# RapidOCR 基于 ONNX Runtime，会话非线程安全，并发调用需加锁
+ocr_lock = threading.Lock()
 
 def init_ocr():
     """初始化OCR引擎"""
@@ -85,7 +91,8 @@ def ocr_recognize():
 
         # RapidOCR返回: (result, elapse)
         # result是列表，每个元素是 [box, text, score]
-        result, elapse = ocr_engine(img_array)
+        with ocr_lock:
+            result, elapse = ocr_engine(img_array)
 
         if result is None or len(result) == 0:
             return jsonify({
@@ -224,7 +231,8 @@ def table_recognize():
         img_array = np.array(image)
 
         # 执行OCR
-        result, elapse = ocr_engine(img_array)
+        with ocr_lock:
+            result, elapse = ocr_engine(img_array)
 
         if result is None or len(result) == 0:
             return jsonify({
@@ -263,4 +271,4 @@ if __name__ == '__main__':
     print("  POST /ocr    - OCR识别")
     print("  POST /table  - 表格识别")
 
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True)

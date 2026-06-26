@@ -24,6 +24,10 @@ bool JsonExporter::exportInvoices(const QString &filePath, const QList<InvoiceDa
     }
 
     file.write(doc.toJson(QJsonDocument::Indented));
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -44,6 +48,10 @@ bool JsonExporter::exportItineraries(const QString &filePath, const QList<Itiner
     }
 
     file.write(doc.toJson(QJsonDocument::Indented));
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -59,6 +67,10 @@ bool JsonExporter::exportTable(const QString &filePath, const TableData &table)
     }
 
     file.write(doc.toJson(QJsonDocument::Indented));
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -79,6 +91,10 @@ bool JsonExporter::exportTables(const QString &filePath, const QList<TableData> 
     }
 
     file.write(doc.toJson(QJsonDocument::Indented));
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }
@@ -124,6 +140,10 @@ bool JsonExporter::exportAll(const QString &filePath,
     }
 
     file.write(doc.toJson(QJsonDocument::Indented));
+    if (file.error() != QFile::NoError) {
+        m_lastError = tr("写入文件失败: %1").arg(filePath);
+        return false;
+    }
     file.close();
     return true;
 }

@@ -288,12 +288,30 @@ void ProcessingPanel::appendLog(const QString &message)
 {
     if (!m_textLog) return;
 
+    // 限制日志行数，避免处理大量文件时 QTextEdit 内存暴涨
+    const int kMaxBlocks = 2000;
+    const int kTrimTo = 1000;
+    if (m_textLog->document()->blockCount() > kMaxBlocks) {
+        QTextCursor cur = m_textLog->textCursor();
+        cur.movePosition(QTextCursor::Start);
+        cur.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor, kMaxBlocks - kTrimTo);
+        cur.removeSelectedText();
+    }
+
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
     m_textLog->append(QString("[%1] %2").arg(timestamp, message));
     // 滚动到底部
     QTextCursor cursor = m_textLog->textCursor();
     cursor.movePosition(QTextCursor::End);
     m_textLog->setTextCursor(cursor);
+}
+
+void ProcessingPanel::setProcessing(bool processing)
+{
+    if (m_btnStart) m_btnStart->setEnabled(!processing);
+    if (m_btnCancel) m_btnCancel->setEnabled(processing);
+    if (m_btnConfigureApi) m_btnConfigureApi->setEnabled(!processing);
+    if (m_comboBackend) m_comboBackend->setEnabled(!processing);
 }
 
 void ProcessingPanel::clearLog()

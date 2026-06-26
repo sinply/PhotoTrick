@@ -41,6 +41,9 @@ public:
 
     void setServerStatus(ServerStatus status);
 
+    // 处理中状态：禁用开始/配置按钮，启用取消按钮
+    void setProcessing(bool processing);
+
     // API状态
     enum class ApiStatus {
         NotConfigured,

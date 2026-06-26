@@ -312,7 +312,13 @@ void ApiConfigWidget::onTestConnection()
 
     QNetworkRequest request{QUrl(url)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKey).toUtf8());
+    // Claude 格式用 x-api-key，OpenAI 格式用 Bearer，否则 Anthropic 端点会 401
+    if (m_backend == "claude_format") {
+        request.setRawHeader("x-api-key", apiKey.toUtf8());
+        request.setRawHeader("anthropic-version", "2023-06-01");
+    } else {
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(apiKey).toUtf8());
+    }
 
     QJsonObject requestBody;
     requestBody["model"] = model;

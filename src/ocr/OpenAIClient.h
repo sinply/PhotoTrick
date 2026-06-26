@@ -3,6 +3,7 @@
 
 #include "OcrInterface.h"
 #include <QNetworkAccessManager>
+#include <QPointer>
 
 class OpenAIClient : public OcrInterface
 {
@@ -17,6 +18,7 @@ public:
 
     void recognize(const QImage &image, const QString &prompt) override;
     bool isReady() const override;
+    void cancel() override;
 
 private:
     QString encodeImageToBase64(const QImage &image);
@@ -24,6 +26,7 @@ private:
     void handleResponse(QNetworkReply *reply);
 
     QNetworkAccessManager *m_networkManager;
+    QPointer<QNetworkReply> m_currentReply;
     QString m_apiKey;
     QString m_baseUrl;
     QString m_model;

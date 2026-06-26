@@ -28,9 +28,11 @@ void InvoiceClassifier::initKeywords()
     };
 
     // 餐饮类关键词
+    // 注：不含"酒店"——含"酒店"的销方更可能是住宿，且 matchByKeywords 按 Category
+    // 枚举顺序匹配，Accommodation 先于 Dining，"酒店"放这里永远到不了。
     m_keywords[InvoiceData::Dining] = {
         QStringLiteral("餐饮"), QStringLiteral("餐厅"), QStringLiteral("饭店"),
-        QStringLiteral("酒店"), QStringLiteral("美食"), QStringLiteral("快餐"),
+        QStringLiteral("美食"), QStringLiteral("快餐"),
         QStringLiteral("外卖"), QStringLiteral("食品"), QStringLiteral("饮品"),
         QStringLiteral("咖啡"), QStringLiteral("茶楼"), QStringLiteral("小吃"),
         QStringLiteral("火锅"), QStringLiteral("烧烤"), QStringLiteral("海鲜"),

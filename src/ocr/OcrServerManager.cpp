@@ -6,6 +6,8 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 // Helper function to log to file
 static void logToFile(const QString &message)
@@ -17,6 +19,18 @@ static void logToFile(const QString &message)
         file.write(QString("[%1] %2\n").arg(timestamp, message).toUtf8());
         file.close();
     }
+}
+
+// 解析健康检查响应，避免字符串匹配 "\"status\":\"ok\"" 在 jsonify 输出带空格时失效
+static bool healthOk(const QByteArray &data)
+{
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    if (doc.isNull() || !doc.isObject()) {
+        // 兜底：JSON 解析失败时回退到字符串匹配
+        return data.contains("ok");
+    }
+    return doc.object().value("status").toString() == "ok";
 }
 
 OcrServerManager::OcrServerManager(QObject *parent)
@@ -100,7 +114,7 @@ void OcrServerManager::start()
         if (reply->error() == QNetworkReply::NoError) {
             QByteArray data = reply->readAll();
             logToFile(QString("Initial health check response: %1").arg(QString::fromUtf8(data)));
-            if (data.contains("\"status\":\"ok\"")) {
+            if (healthOk(data)) {
                 logToFile("Server already running! Setting status to Running");
                 setStatus(Running);
                 return;
@@ -191,6 +205,15 @@ void OcrServerManager::stop()
             m_process->waitForFinished(1000);
         }
     }
+
+#ifdef Q_OS_WIN
+    // WSL 下 wsl.exe 启动后立即退出，真正的 Python 服务在 WSL 后台继续运行，
+    // terminate/kill 只杀了 wsl.exe，端口仍被孤儿进程占用。用 pkill 清理。
+    if (m_pythonPath == "python" || m_pythonPath.isEmpty() || m_pythonPath == "wsl"
+        || m_pythonPath.endsWith("wsl") || m_pythonPath.endsWith("wsl.exe")) {
+        QProcess::execute("wsl.exe", {"--exec", "pkill", "-f", "paddle_server.py"});
+    }
+#endif
 
     setStatus(NotRunning);
 }
@@ -295,7 +318,7 @@ void OcrServerManager::performHealthCheck()
         if (reply->error() == QNetworkReply::NoError) {
             QByteArray data = reply->readAll();
             logToFile(QString("Health check response: %1").arg(QString::fromUtf8(data)));
-            if (data.contains("\"status\":\"ok\"")) {
+            if (healthOk(data)) {
                 if (m_status == Starting) {
                     m_healthCheckRetries = 0;
                 }

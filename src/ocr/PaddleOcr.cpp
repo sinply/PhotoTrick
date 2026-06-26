@@ -120,19 +120,33 @@ void PaddleOcr::recognize(const QImage &image, const QString &prompt)
     // Send request
     QNetworkRequest request(QUrl(m_serverUrl + "/ocr"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setTransferTimeout(m_timeout);
 
     QNetworkReply *reply = m_networkManager->post(request, doc.toJson());
+    m_currentReply = reply;
 
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         handleResponse(reply);
     });
 }
 
+void PaddleOcr::cancel()
+{
+    if (m_currentReply) {
+        m_currentReply->abort();
+        m_currentReply.clear();
+    }
+}
+
 void PaddleOcr::handleResponse(QNetworkReply *reply)
 {
     reply->deleteLater();
+    m_currentReply.clear();
 
     if (reply->error() != QNetworkReply::NoError) {
+        if (reply->error() == QNetworkReply::OperationCanceledError) {
+            return;  // 用户取消，静默不报错
+        }
         emit recognitionError(tr("OCR请求失败: %1").arg(reply->errorString()));
         return;
     }

@@ -148,8 +148,9 @@ QJsonValue findValueByKeysDeep(const QJsonValue &root, const QStringList &keys)
                     const QString keyNorm = normalizeKey(it.key());
                     bool match = false;
                     for (const QString &target : normalizedTargets) {
-                        // Only allow longer key to contain target
-                        if (keyNorm.length() >= target.length() && keyNorm.contains(target)) {
+                        // Only allow longer key to start with target (prefix match),
+                        // avoids "price" matching "unitPrice" (contains but not prefix)
+                        if (keyNorm.length() >= target.length() && keyNorm.startsWith(target)) {
                             match = true;
                             break;
                         }
@@ -285,7 +286,8 @@ double parseNumber(const QJsonValue &value)
 
 double extractLabeledAmount(const QString &rawText,
                             const QStringList &positiveLabels,
-                            const QStringList &negativeLabels)
+                            const QStringList &negativeLabels,
+                            bool preferSmaller)
 {
     if (rawText.isEmpty() || positiveLabels.isEmpty()) {
         return 0.0;
@@ -421,12 +423,12 @@ double extractLabeledAmount(const QString &rawText,
 
     if (candidates.isEmpty()) return 0.0;
 
-    std::sort(candidates.begin(), candidates.end(), [](const AmountCandidate &a, const AmountCandidate &b) {
+    std::sort(candidates.begin(), candidates.end(), [preferSmaller](const AmountCandidate &a, const AmountCandidate &b) {
         if (a.score != b.score) {
             return a.score > b.score;
         }
-        // When scores are equal, prefer larger values for total amounts
-        return a.value > b.value;
+        // 同分时：税额/不含税金额通常较小，选小值；价税合计选大值
+        return preferSmaller ? (a.value < b.value) : (a.value > b.value);
     });
 
     return candidates.first().value;

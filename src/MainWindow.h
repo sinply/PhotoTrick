@@ -53,6 +53,9 @@ private slots:
     void onTableExtracted(const class TableData &table);
     void onItineraryRecognized(const class ItineraryData &itinerary);
     void onProcessingError(const QString &error);
+    void onCancelProcessing();
+    void onFileConverted(const QString &filePath, const QList<QImage> &images);
+    void onFileConvertFailed(const QString &filePath, const QString &error);
     void processNextFile();
 
     // Export slots
@@ -98,6 +101,8 @@ private:
     QStringList m_pendingFiles;
     int m_currentFileIndex;
     bool m_isProcessing;
+    int m_completedSteps = 0;   // 已完成的识别步骤（文件 + 额外页）
+    int m_totalSteps = 0;       // 总步骤数（开始时=文件数，转换出多页后追加）
 
     // Batch result accumulation
     QStringList m_resultHeaders;
@@ -130,6 +135,7 @@ private:
     void skipCurrentFile(const QString &reason);
     void processImage(const QImage &image);
     void advanceToNextFile();
+    void updateProgress();
  };
 
 #endif // MAINWINDOW_H
