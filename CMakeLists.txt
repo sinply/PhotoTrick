@@ -7,8 +7,10 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Qt6 path - MinGW
-set(CMAKE_PREFIX_PATH "D:/Qt/6.8.3/mingw_64")
+# Qt6 path - overridable via -DCMAKE_PREFIX_PATH=... or env var Qt6_DIR
+if(NOT DEFINED CMAKE_PREFIX_PATH AND NOT DEFINED ENV{Qt6_DIR})
+    set(CMAKE_PREFIX_PATH "D:/Qt/6.8.3/mingw_64")
+endif()
 
 find_package(Qt6 REQUIRED COMPONENTS
     Core
@@ -154,4 +156,55 @@ if(WIN32)
         NO_UNSUPPORTED_PLATFORM_ERROR
     )
     install(SCRIPT ${deploy_script})
+endif()
+
+# ---------- Tests ----------
+option(PHOTOTRICK_BUILD_TESTS "Build unit tests" ON)
+if(PHOTOTRICK_BUILD_TESTS)
+    find_package(Qt6 QUIET COMPONENTS Test)
+    if(Qt6Test_FOUND)
+        enable_testing()
+        qt_add_executable(test_invoice_recognizer
+            tests/test_invoice_recognizer.cpp
+            src/processors/InvoiceRecognizer.cpp
+            src/processors/InvoiceRecognizer.h
+            src/core/OcrManager.cpp
+            src/core/OcrManager.h
+            src/ocr/OcrInterface.h
+            src/ocr/PaddleOcr.cpp
+            src/ocr/PaddleOcr.h
+            src/ocr/ClaudeClient.cpp
+            src/ocr/ClaudeClient.h
+            src/ocr/OpenAIClient.cpp
+            src/ocr/OpenAIClient.h
+            src/ocr/OcrServerManager.cpp
+            src/ocr/OcrServerManager.h
+            src/core/ConfigManager.cpp
+            src/core/ConfigManager.h
+            src/models/InvoiceData.cpp
+            src/models/InvoiceData.h
+            src/classifiers/InvoiceClassifier.cpp
+            src/classifiers/InvoiceClassifier.h
+            src/utils/OcrParser.cpp
+            src/utils/OcrParser.h
+        )
+        target_include_directories(test_invoice_recognizer PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+        )
+        target_link_libraries(test_invoice_recognizer PRIVATE
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Network
+            Qt6::Concurrent
+            Qt6::Test
+        )
+        add_test(NAME test_invoice_recognizer COMMAND test_invoice_recognizer)
+        # 确保 console 输出（非 WIN32 子系统）
+        if(WIN32)
+            set_target_properties(test_invoice_recognizer PROPERTIES WIN32_EXECUTABLE FALSE)
+        endif()
+    else()
+        message(STATUS "Qt6Test not found, skipping unit tests")
+    endif()
 endif()

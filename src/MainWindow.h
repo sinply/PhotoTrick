@@ -90,7 +90,7 @@ private:
     QProgressBar *m_progressBar;
 
     // OCR Manager
-    OcrManager *m_ocrManager;
+    OcrManager *m_ocrManager = nullptr;
 
     // Processors
     InvoiceRecognizer *m_invoiceRecognizer;

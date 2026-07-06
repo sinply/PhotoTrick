@@ -112,16 +112,68 @@ void OcrManager::recognizeImages(const QList<QImage> &images, const QString &pro
         return;
     }
 
-    emit recognitionStarted();
-
-    // For multiple images, process sequentially
-    // Could be enhanced to process in parallel
-    for (int i = 0; i < images.size(); ++i) {
-        emit progress(static_cast<int>(100.0 * i / images.size()));
-        m_currentClient->recognize(images[i], prompt);
+    if (images.isEmpty()) {
+        emit recognitionError(tr("没有可识别的图片"));
+        return;
     }
 
-    emit progress(100);
+    // 单图直接走 recognizeImage，避免队列开销
+    if (images.size() == 1) {
+        recognizeImage(images.first(), prompt);
+        return;
+    }
+
+    // 多图：建立串行队列，连接一次性信号，等前一张完成再发下一张
+    m_pendingImages = images;
+    m_pendingPrompt = prompt;
+    m_pendingTotal = images.size();
+    m_pendingIndex = 0;
+    m_batchActive = true;
+
+    emit recognitionStarted();
+
+    // 串行钩子：每张完成/失败都推进下一张
+    connect(m_currentClient, &OcrInterface::recognitionFinished,
+            this, &OcrManager::onBatchFinished, Qt::UniqueConnection);
+    connect(m_currentClient, &OcrInterface::recognitionError,
+            this, &OcrManager::onBatchError, Qt::UniqueConnection);
+
+    dispatchNextPending();
+}
+
+void OcrManager::dispatchNextPending()
+{
+    if (!m_batchActive || m_pendingIndex >= m_pendingTotal) {
+        return;
+    }
+    emit progress(static_cast<int>(100.0 * m_pendingIndex / m_pendingTotal));
+    const QImage &img = m_pendingImages[m_pendingIndex];
+    m_currentClient->recognize(img, m_pendingPrompt);
+}
+
+void OcrManager::onBatchFinished(const QJsonObject &result)
+{
+    if (!m_batchActive) return;
+    ++m_pendingIndex;
+    emit recognitionFinished(result);
+    if (m_pendingIndex < m_pendingTotal) {
+        dispatchNextPending();
+    } else {
+        emit progress(100);
+        m_batchActive = false;
+    }
+}
+
+void OcrManager::onBatchError(const QString &error)
+{
+    if (!m_batchActive) return;
+    ++m_pendingIndex;
+    emit recognitionError(error);
+    if (m_pendingIndex < m_pendingTotal) {
+        dispatchNextPending();
+    } else {
+        m_batchActive = false;
+    }
 }
 
 void OcrManager::cancelCurrent()

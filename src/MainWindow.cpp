@@ -58,6 +58,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_ocrManager = new OcrManager(this);
     } catch (const std::exception &e) {
         QMessageBox::critical(this, tr("错误"), tr("初始化OCR管理器失败: %1").arg(e.what()));
+        m_ocrManager = nullptr;
     }
 
     // Initialize processors
@@ -253,11 +254,10 @@ void MainWindow::onActionAddFiles()
         this,
         tr("选择文件"),
         QString(),
-        tr("支持的文件 (*.jpg *.jpeg *.png *.bmp *.gif *.tiff *.webp *.heic *.pdf *.ofd *.docx *.xlsx);;")
+        tr("支持的文件 (*.jpg *.jpeg *.png *.bmp *.gif *.tiff *.webp *.heic *.pdf *.docx *.xlsx);;")
         + tr("图片 (*.jpg *.jpeg *.png *.bmp *.gif *.tiff *.webp *.heic);;")
         + tr("PDF文件 (*.pdf);;")
-        + tr("OFD文件 (*.ofd);;")
-        + tr("Word文档 (*.docx);;")
+        + tr("Word文档 (*.docx);;;")
         + tr("Excel文档 (*.xlsx);;")
         + tr("所有文件 (*)")
     );
@@ -412,8 +412,8 @@ void MainWindow::processNextFile()
         return;
     }
 
-    // Document formats (PDF/OFD/DOCX/XLSX/HEIC): convert asynchronously so UI stays responsive
-    QStringList convertibleFormats = {"pdf", "ofd", "docx", "xlsx", "heic"};
+    // Document formats (PDF/DOCX/XLSX/HEIC): convert asynchronously so UI stays responsive
+    QStringList convertibleFormats = {"pdf", "docx", "xlsx", "heic"};
     if (!convertibleFormats.contains(ext)) {
         skipCurrentFile(tr("不支持的文件格式: %1").arg(ext.toUpper()));
         return;
@@ -594,6 +594,11 @@ void MainWindow::onProcessingProgress(int percent)
 
 void MainWindow::onOcrBackendChanged(const QString &backend)
 {
+    if (!m_ocrManager) {
+        qWarning() << "MainWindow: OcrManager 未初始化，忽略后端切换";
+        return;
+    }
+
     OcrManager::Backend ocrBackend = OcrManager::PaddleOCR_Local;
 
     if (backend == "paddle_local") {
@@ -875,8 +880,9 @@ void MainWindow::onExportMarkdown()
         return;
     }
 
+    QString outDir = ConfigManager::instance()->outputDirectory();
     QString path = QFileDialog::getSaveFileName(this, tr("导出 Markdown"),
-        QDir::currentPath() + "/发票结果.md",
+        outDir + "/发票结果.md",
         tr("Markdown 文件 (*.md)"));
     if (path.isEmpty()) return;
 
@@ -901,8 +907,9 @@ void MainWindow::onExportCsv()
         return;
     }
 
+    QString outDir = ConfigManager::instance()->outputDirectory();
     QString path = QFileDialog::getSaveFileName(this, tr("导出 CSV"),
-        QDir::currentPath() + "/发票结果.csv",
+        outDir + "/发票结果.csv",
         tr("CSV 文件 (*.csv)"));
     if (path.isEmpty()) return;
 
@@ -927,8 +934,9 @@ void MainWindow::onExportJson()
         return;
     }
 
+    QString outDir = ConfigManager::instance()->outputDirectory();
     QString path = QFileDialog::getSaveFileName(this, tr("导出 JSON"),
-        QDir::currentPath() + "/发票结果.json",
+        outDir + "/发票结果.json",
         tr("JSON 文件 (*.json)"));
     if (path.isEmpty()) return;
 
@@ -974,9 +982,11 @@ void MainWindow::loadApiSettingsForBackend(const QString &backend)
     }
 
     // Sync to OcrManager
-    m_ocrManager->setApiKey(apiKey);
-    m_ocrManager->setBaseUrl(baseUrl);
-    m_ocrManager->setModel(model);
+    if (m_ocrManager) {
+        m_ocrManager->setApiKey(apiKey);
+        m_ocrManager->setBaseUrl(baseUrl);
+        m_ocrManager->setModel(model);
+    }
 }
 
 void MainWindow::saveApiSettings()
@@ -1000,9 +1010,11 @@ void MainWindow::saveApiSettings()
     cfg->save();
 
     // 同步传递到 OcrManager
-    m_ocrManager->setApiKey(apiKey);
-    m_ocrManager->setBaseUrl(baseUrl);
-    m_ocrManager->setModel(model);
+    if (m_ocrManager) {
+        m_ocrManager->setApiKey(apiKey);
+        m_ocrManager->setBaseUrl(baseUrl);
+        m_ocrManager->setModel(model);
+    }
 }
 
 void MainWindow::resetBatchResultTable()
@@ -1061,8 +1073,11 @@ void MainWindow::writeBatchSummaryFile()
         return;  // Nothing to report
     }
 
-    // 优先写到文档目录，避免 currentPath 不可写（如安装到 Program Files 或从快捷方式启动）
-    QString reportDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    // 优先用配置的输出目录，回退到文档目录，避免 currentPath 不可写
+    QString reportDir = ConfigManager::instance()->outputDirectory();
+    if (reportDir.isEmpty() || !QDir(reportDir).exists()) {
+        reportDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    }
     if (reportDir.isEmpty() || !QDir(reportDir).exists()) {
         reportDir = QDir::currentPath();
     }

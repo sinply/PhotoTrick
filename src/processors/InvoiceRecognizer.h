@@ -21,6 +21,9 @@ public:
 
     void setOcrManager(OcrManager *manager);
 
+    // 测试入口：解析 OCR 结果 JSON 为 InvoiceData（生产代码通过 recognize() 间接调用）
+    InvoiceData parseInvoiceDataForTest(const QJsonObject &json) { return parseInvoiceData(json); }
+
 signals:
     void recognitionFinished(const InvoiceData &invoice);
     void recognitionError(const QString &error);

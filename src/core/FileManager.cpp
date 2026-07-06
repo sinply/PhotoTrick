@@ -5,7 +5,7 @@
 
 const QStringList FileManager::SUPPORTED_EXTENSIONS = {
     "jpg", "jpeg", "png", "bmp", "gif", "tiff", "webp", "heic",
-    "pdf", "ofd", "docx", "xlsx"
+    "pdf", "docx", "xlsx"
 };
 
 FileManager::FileManager(QObject *parent)
@@ -111,7 +111,6 @@ QString FileManager::detectFileType(const QString &filePath) const
         return "image";
     }
     if (ext == "pdf") return "pdf";
-    if (ext == "ofd") return "ofd";
     if (ext == "docx") return "docx";
     if (ext == "xlsx") return "xlsx";
 

@@ -8,6 +8,10 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QToolButton>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QUrl>
+#include <QMimeData>
 
 FileListView::FileListView(QWidget *parent)
     : QWidget(parent)
@@ -64,7 +68,12 @@ void FileListView::setupUI()
     m_listWidget = new QListWidget(this);
     m_listWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_listWidget->setAlternatingRowColors(true);
+    m_listWidget->setAcceptDrops(true);
+    m_listWidget->setDragDropMode(QAbstractItemView::DropOnly);
     mainLayout->addWidget(m_listWidget);
+
+    // 整个 FileListView 也接受拖拽（覆盖列表外的空白区域）
+    setAcceptDrops(true);
 
     // Status label
     m_labelCount = new QLabel(tr("共 0 个文件"), this);
@@ -76,7 +85,7 @@ void FileListView::setupConnections()
     connect(m_btnAddFiles, &QPushButton::clicked, this, [this]() {
         QStringList files = QFileDialog::getOpenFileNames(
             this, tr("选择文件"), QString(),
-            tr("支持的文件 (*.jpg *.jpeg *.png *.bmp *.gif *.tiff *.webp *.heic *.pdf *.ofd *.docx *.xlsx)")
+            tr("支持的文件 (*.jpg *.jpeg *.png *.bmp *.gif *.tiff *.webp *.heic *.pdf *.docx *.xlsx)")
         );
         if (!files.isEmpty()) {
             addFiles(files);
@@ -120,7 +129,7 @@ void FileListView::addFolder(const QString &folder)
     QDir dir(folder);
     QStringList filters;
     filters << "*.jpg" << "*.jpeg" << "*.png" << "*.bmp" << "*.gif"
-            << "*.tiff" << "*.webp" << "*.heic" << "*.pdf" << "*.ofd"
+            << "*.tiff" << "*.webp" << "*.heic" << "*.pdf"
             << "*.docx" << "*.xlsx";
 
     QStringList files;
@@ -204,7 +213,7 @@ bool FileListView::isFileSupported(const QString &filePath) const
 {
     QString ext = QFileInfo(filePath).suffix().toLower();
     QStringList supported = {"jpg", "jpeg", "png", "bmp", "gif", "tiff",
-                             "webp", "heic", "pdf", "ofd", "docx", "xlsx"};
+                             "webp", "heic", "pdf", "docx", "xlsx"};
     return supported.contains(ext);
 }
 
@@ -213,7 +222,6 @@ QString FileListView::getFileTypeIcon(const QString &filePath) const
     QString ext = QFileInfo(filePath).suffix().toLower();
 
     if (ext == "pdf") return "📄";
-    if (ext == "ofd") return "📄";
     if (ext == "docx") return "📝";
     if (ext == "xlsx") return "📊";
     if (ext == "heic") return "🖼️";
@@ -282,5 +290,54 @@ void FileListView::onRecentFileTriggered()
         if (!filePath.isEmpty() && isFileSupported(filePath)) {
             addFiles(QStringList() << filePath);
         }
+    }
+}
+
+void FileListView::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        event->ignore();
+    }
+}
+
+void FileListView::dropEvent(QDropEvent *event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
+    }
+
+    QStringList files;
+    QStringList folders;
+    for (const QUrl &url : event->mimeData()->urls()) {
+        QString localPath = url.toLocalFile();
+        if (localPath.isEmpty()) continue;
+        QFileInfo info(localPath);
+        if (info.isFile()) {
+            if (isFileSupported(localPath)) {
+                files << localPath;
+            }
+        } else if (info.isDir()) {
+            folders << localPath;
+        }
+    }
+
+    int count = 0;
+    if (!files.isEmpty()) {
+        addFiles(files);
+        count += files.size();
+    }
+    for (const QString &folder : folders) {
+        int before = fileCount();
+        addFolder(folder);
+        count += fileCount() - before;
+    }
+
+    if (count > 0) {
+        event->acceptProposedAction();
+    } else {
+        event->ignore();
     }
 }

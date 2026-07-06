@@ -1,11 +1,11 @@
 #include "SettingsDialog.h"
+#include "../core/ConfigManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QPushButton>
 #include <QFileDialog>
-#include <QSettings>
 
 SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent)
@@ -115,7 +115,6 @@ QWidget *SettingsDialog::createExportTab()
 
     m_comboDefaultFormat = new QComboBox(this);
     m_comboDefaultFormat->addItem(tr("Markdown"), "markdown");
-    m_comboDefaultFormat->addItem(tr("Word"), "word");
     m_comboDefaultFormat->addItem(tr("Excel"), "excel");
     m_comboDefaultFormat->addItem(tr("JSON"), "json");
     form->addRow(tr("默认导出格式:"), m_comboDefaultFormat);
@@ -128,36 +127,37 @@ QWidget *SettingsDialog::createExportTab()
 
 void SettingsDialog::loadSettings()
 {
-    QSettings settings("PhotoTrick", "PhotoTrick");
+    ConfigManager *cfg = ConfigManager::instance();
 
-    QString lang = settings.value("language", "zh_CN").toString();
+    QString lang = cfg->language();
     int langIndex = m_comboLanguage->findData(lang);
     if (langIndex >= 0) m_comboLanguage->setCurrentIndex(langIndex);
 
-    QString theme = settings.value("theme", "light").toString();
+    QString theme = cfg->theme();
     int themeIndex = m_comboTheme->findData(theme);
     if (themeIndex >= 0) m_comboTheme->setCurrentIndex(themeIndex);
 
-    m_editOutputDir->setText(settings.value("outputDir", QDir::homePath()).toString());
+    m_editOutputDir->setText(cfg->outputDirectory());
 
-    QString backend = settings.value("ocrBackend", "paddle_local").toString();
+    QString backend = cfg->defaultOcrBackend();
     int backendIndex = m_comboDefaultBackend->findData(backend);
     if (backendIndex >= 0) m_comboDefaultBackend->setCurrentIndex(backendIndex);
 
-    QString format = settings.value("exportFormat", "markdown").toString();
+    QString format = cfg->defaultExportFormat();
     int formatIndex = m_comboDefaultFormat->findData(format);
     if (formatIndex >= 0) m_comboDefaultFormat->setCurrentIndex(formatIndex);
 }
 
 void SettingsDialog::saveSettings()
 {
-    QSettings settings("PhotoTrick", "PhotoTrick");
+    ConfigManager *cfg = ConfigManager::instance();
 
-    settings.setValue("language", m_comboLanguage->currentData());
-    settings.setValue("theme", m_comboTheme->currentData());
-    settings.setValue("outputDir", m_editOutputDir->text());
-    settings.setValue("ocrBackend", m_comboDefaultBackend->currentData());
-    settings.setValue("exportFormat", m_comboDefaultFormat->currentData());
+    cfg->setLanguage(m_comboLanguage->currentData().toString());
+    cfg->setTheme(m_comboTheme->currentData().toString());
+    cfg->setOutputDirectory(m_editOutputDir->text());
+    cfg->setDefaultOcrBackend(m_comboDefaultBackend->currentData().toString());
+    cfg->setDefaultExportFormat(m_comboDefaultFormat->currentData().toString());
+    cfg->save();
 }
 
 void SettingsDialog::onAccepted()

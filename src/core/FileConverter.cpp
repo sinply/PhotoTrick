@@ -100,8 +100,6 @@ QList<QImage> FileConverter::convertToImages(const QString &filePath)
 
     if (ext == "pdf") {
         convertPdf(filePath, images);
-    } else if (ext == "ofd") {
-        convertOfd(filePath, images);
     } else if (ext == "docx") {
         extractImagesFromDocx(filePath, images);
     } else if (ext == "xlsx") {
@@ -138,35 +136,6 @@ bool FileConverter::convertPdf(const QString &filePath, QList<QImage> &outImages
     QDir().mkpath(outputDir);
 
     if (runPythonConverter("pdf_to_images", filePath, outputDir)) {
-        QDir dir(outputDir);
-        QStringList filters;
-        filters << "*.jpg" << "*.png";
-        QStringList files = dir.entryList(filters, QDir::Files, QDir::Name);
-
-        for (const QString &file : files) {
-            QImage img;
-            if (img.load(dir.filePath(file))) {
-                outImages.append(img);
-            }
-        }
-
-        for (const QString &file : files) {
-            QFile::remove(dir.filePath(file));
-        }
-        QDir().rmdir(outputDir);
-    }
-
-    return !outImages.isEmpty();
-}
-
-bool FileConverter::convertOfd(const QString &filePath, QList<QImage> &outImages)
-{
-    QString outputDir = QDir::tempPath() + "/phototrick_ofd_" +
-                        uniqueTempPrefix(filePath);
-
-    QDir().mkpath(outputDir);
-
-    if (runPythonConverter("ofd_to_images", filePath, outputDir)) {
         QDir dir(outputDir);
         QStringList filters;
         filters << "*.jpg" << "*.png";
@@ -293,23 +262,17 @@ bool FileConverter::requestConvert(const QString &filePath)
     QString ext = QFileInfo(filePath).suffix().toLower();
     QString action;
     QString prefix;
-    bool outputIsFile = false;
 
     if (ext == "pdf") {
         action = "pdf_to_images"; prefix = "pdf";
-    } else if (ext == "ofd") {
-        // OFD 转换尚未实现（file_converter_cli.py 返回 not supported），
-        // 给出清晰提示而非通用的"格式转换失败"
-        emit conversionError(filePath, tr("OFD 格式暂不支持，请先转换为 PDF 或图片后重试"));
-        return false;
     } else if (ext == "docx") {
         action = "extract_docx_images"; prefix = "docx";
     } else if (ext == "xlsx") {
         action = "extract_xlsx_images"; prefix = "xlsx";
     } else if (ext == "heic") {
-        action = "heic_to_jpg"; prefix = "heic"; outputIsFile = false;
         // heic 的 python 接口期望一个 .jpg 文件路径，但我们统一用目录容器
         // 让输出落到 outputDir/output.jpg，再从目录扫描收集
+        action = "heic_to_jpg"; prefix = "heic";
     } else {
         emit conversionError(filePath, tr("不支持的文件格式: %1").arg(ext.toUpper()));
         return false;
@@ -321,12 +284,7 @@ bool FileConverter::requestConvert(const QString &filePath)
         QCryptographicHash::Sha1).toHex()).left(8);
     QString outputDir = QDir::tempPath() + QString("/phototrick_%1_%2").arg(prefix, key);
 
-    // heic: python 期望 .jpg 文件路径，给它目录内的 output.jpg
-    QString outputPath = outputIsFile ? (outputDir + "/output.jpg") : outputDir;
-    Q_UNUSED(outputIsFile);
-
-    startAsyncConvert(filePath, action, outputPath, /*outputIsFile=*/false);
-    // outputIsFile 恒为 false：我们总是从 outputDir 扫描收集，heic 时落 output.jpg 进目录
+    startAsyncConvert(filePath, action, outputDir, /*outputIsFile=*/false);
     return true;
 }
 

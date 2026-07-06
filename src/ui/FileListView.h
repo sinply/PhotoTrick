@@ -38,6 +38,10 @@ private slots:
     void onItemSelectionChanged();
     void onRecentFileTriggered();
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     void setupUI();
     void setupConnections();

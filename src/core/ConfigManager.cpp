@@ -1,5 +1,8 @@
 #include "ConfigManager.h"
 #include <QDir>
+#include <QProcessEnvironment>
+#include <QStandardPaths>
+#include <QFileInfo>
 
 ConfigManager* ConfigManager::instance()
 {
@@ -128,8 +131,23 @@ void ConfigManager::setDefaultExportFormat(const QString &format)
 QString ConfigManager::pythonPath() const
 {
 #ifdef Q_OS_WIN
-    // On Windows, use WSL by default (wsl python3)
-    return m_settings->value("pythonPath", "wsl").toString();
+    // 探测原生 python：优先 PATH 上的 python.exe，回退 wsl，最后 python
+{
+    static QString cached;
+    if (cached.isEmpty()) {
+        const QStringList candidates = { QStringLiteral("python.exe"), QStringLiteral("python") };
+        for (const QString &c : candidates) {
+            // QStandardPaths::findExecutable 在 Windows 上会自动补 .exe
+            QString found = QStandardPaths::findExecutable(c);
+            if (!found.isEmpty()) {
+                cached = found;
+                break;
+            }
+        }
+        if (cached.isEmpty()) cached = QStringLiteral("wsl");
+    }
+    return m_settings->value("pythonPath", cached).toString();
+}
 #else
     return m_settings->value("pythonPath", "python3").toString();
 #endif
@@ -168,6 +186,16 @@ bool ConfigManager::stopOcrServerOnExit() const
 void ConfigManager::setStopOcrServerOnExit(bool stop)
 {
     m_settings->setValue("stopOcrServerOnExit", stop);
+}
+
+QString ConfigManager::ocrServerUrl() const
+{
+    return m_settings->value("ocrServerUrl", QStringLiteral("http://127.0.0.1:5000")).toString();
+}
+
+void ConfigManager::setOcrServerUrl(const QString &url)
+{
+    m_settings->setValue("ocrServerUrl", url);
 }
 
 QStringList ConfigManager::recentFiles() const

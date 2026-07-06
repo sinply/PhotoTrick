@@ -63,6 +63,10 @@ public:
     bool stopOcrServerOnExit() const;
     void setStopOcrServerOnExit(bool stop);
 
+    // PaddleOCR 服务地址（默认 http://127.0.0.1:5000）
+    QString ocrServerUrl() const;
+    void setOcrServerUrl(const QString &url);
+
     // File history
     QStringList recentFiles() const;
     void addRecentFile(const QString &filePath);

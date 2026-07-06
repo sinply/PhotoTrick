@@ -11,7 +11,7 @@ PaddleOcr::PaddleOcr(QObject *parent)
     : OcrInterface(parent)
     , m_networkManager(new QNetworkAccessManager(this))
     , m_serverManager(new OcrServerManager(this))
-    , m_serverUrl("http://127.0.0.1:5000")
+    , m_serverUrl(ConfigManager::instance()->ocrServerUrl())
 {
     // Connect server status changes
     connect(m_serverManager, &OcrServerManager::statusChanged,
@@ -95,6 +95,8 @@ void PaddleOcr::recognize(const QImage &image, const QString &prompt)
         }
     }
 
+    saveRequestContext(image, prompt);
+
     // Convert image to base64
     QByteArray imageData;
     QBuffer buffer(&imageData);
@@ -147,6 +149,13 @@ void PaddleOcr::handleResponse(QNetworkReply *reply)
         if (reply->error() == QNetworkReply::OperationCanceledError) {
             return;  // 用户取消，静默不报错
         }
+        // 网络错误：重试一次
+        if (shouldRetry(QStringLiteral("PaddleOcr"))) {
+            if (!m_lastImage.isNull()) {
+                recognize(m_lastImage, m_lastPrompt);
+            }
+            return;
+        }
         emit recognitionError(tr("OCR请求失败: %1").arg(reply->errorString()));
         return;
     }
@@ -155,6 +164,12 @@ void PaddleOcr::handleResponse(QNetworkReply *reply)
     QJsonDocument doc = QJsonDocument::fromJson(response);
 
     if (doc.isNull() || !doc.isObject()) {
+        if (shouldRetry(QStringLiteral("PaddleOcr"))) {
+            if (!m_lastImage.isNull()) {
+                recognize(m_lastImage, m_lastPrompt);
+            }
+            return;
+        }
         emit recognitionError(tr("OCR响应格式错误"));
         return;
     }

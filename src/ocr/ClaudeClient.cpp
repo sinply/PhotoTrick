@@ -154,26 +154,35 @@ void ClaudeClient::handleResponse(QNetworkReply *reply)
 
     // Extract content from Claude response
     QJsonObject output;
-    if (result.contains("content")) {
-        QJsonArray content = result["content"].toArray();
-        QString text;
-        for (const auto &item : content) {
-            if (item.toObject()["type"].toString() == "text") {
-                text += item.toObject()["text"].toString();
-            }
-        }
+    if (!result.contains("content")) {
+        emit recognitionError(tr("API响应缺少content字段"));
+        return;
+    }
 
-        // Try to parse as JSON
-        QJsonDocument textDoc = OcrParser::tryParseJson(text);
-        if (!textDoc.isNull()) {
-            if (textDoc.isObject()) {
-                output = textDoc.object();
-            } else if (textDoc.isArray()) {
-                output["tables"] = textDoc.array();
-            }
-        } else {
-            output["text"] = text;
+    QJsonArray content = result["content"].toArray();
+    QString text;
+    for (const auto &item : content) {
+        QJsonObject itemObj = item.toObject();
+        if (itemObj.value("type").toString() == "text") {
+            text += itemObj.value("text").toString();
         }
+    }
+
+    if (text.isEmpty()) {
+        emit recognitionError(tr("API返回空内容"));
+        return;
+    }
+
+    // Try to parse as JSON
+    QJsonDocument textDoc = OcrParser::tryParseJson(text);
+    if (!textDoc.isNull()) {
+        if (textDoc.isObject()) {
+            output = textDoc.object();
+        } else if (textDoc.isArray()) {
+            output["tables"] = textDoc.array();
+        }
+    } else {
+        output["text"] = text;
     }
 
     emit recognitionFinished(output);

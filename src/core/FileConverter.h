@@ -19,7 +19,6 @@ public:
 
     bool convertHeic(const QString &filePath, QImage &outImage);
     bool convertPdf(const QString &filePath, QList<QImage> &outImages);
-    bool convertOfd(const QString &filePath, QList<QImage> &outImages);
     bool extractImagesFromDocx(const QString &filePath, QList<QImage> &outImages);
     bool extractImagesFromXlsx(const QString &filePath, QList<QImage> &outImages);
 

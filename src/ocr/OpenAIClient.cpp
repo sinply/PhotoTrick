@@ -155,20 +155,31 @@ void OpenAIClient::handleResponse(QNetworkReply *reply)
     if (result.contains("choices")) {
         QJsonArray choices = result["choices"].toArray();
         if (!choices.isEmpty()) {
-            QString text = choices[0].toObject()["message"].toObject()["content"].toString();
+            QJsonValue msgVal = choices[0].toObject().value("message");
+            if (msgVal.isObject()) {
+                QString text = msgVal.toObject().value("content").toString();
 
-            // Try to parse as JSON
-            QJsonDocument textDoc = OcrParser::tryParseJson(text);
-            if (!textDoc.isNull()) {
-                if (textDoc.isObject()) {
-                    output = textDoc.object();
-                } else if (textDoc.isArray()) {
-                    output["tables"] = textDoc.array();
+                if (text.isEmpty()) {
+                    emit recognitionError(tr("API返回空内容"));
+                    return;
                 }
-            } else {
-                output["text"] = text;
+
+                // Try to parse as JSON
+                QJsonDocument textDoc = OcrParser::tryParseJson(text);
+                if (!textDoc.isNull()) {
+                    if (textDoc.isObject()) {
+                        output = textDoc.object();
+                    } else if (textDoc.isArray()) {
+                        output["tables"] = textDoc.array();
+                    }
+                } else {
+                    output["text"] = text;
+                }
             }
         }
+    } else {
+        emit recognitionError(tr("API响应缺少choices字段"));
+        return;
     }
 
     emit recognitionFinished(output);

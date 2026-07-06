@@ -13,12 +13,14 @@
 #include <QDateTime>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QStandardPaths>
+#include <QDir>
 #include <functional>
 #include <algorithm>
 
 namespace {
-QFile* debugLogFile = nullptr;
-// parseInvoiceData 可能在 QtConcurrent 线程并发调用，日志文件写入需加锁，否则交错损坏
+// 日志写到用户数据目录（避免 CWD 不可写），由环境变量 PHOTOTRICK_DEBUG 启用。
+// 使用静态局部 QFile：进程退出时自动析构，无泄漏。
 QMutex s_logMutex;
 
 void debugLog(const QString &message)
@@ -26,13 +28,22 @@ void debugLog(const QString &message)
     QMutexLocker locker(&s_logMutex);
     qDebug() << message;
 
-    if (!debugLogFile) {
-        debugLogFile = new QFile("invoice_debug.log");
-        if (debugLogFile->open(QIODevice::WriteOnly | QIODevice::Append)) {
-            QTextStream stream(debugLogFile);
-            stream << "\n\n========== NEW SESSION " << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss") << " ==========\n";
+    static bool enabled = !qEnvironmentVariableIsEmpty("PHOTOTRICK_DEBUG");
+    if (!enabled) return;
+
+    static QFile *debugLogFile = []() -> QFile* {
+        QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if (dir.isEmpty()) dir = QDir::tempPath();
+        QDir().mkpath(dir);
+        QFile *f = new QFile(dir + QDir::separator() + "invoice_debug.log");
+        if (f->open(QIODevice::WriteOnly | QIODevice::Append)) {
+            QTextStream stream(f);
+            stream << "\n\n========== NEW SESSION "
+                   << QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss")
+                   << " ==========\n";
         }
-    }
+        return f;
+    }();
 
     if (debugLogFile && debugLogFile->isOpen()) {
         QTextStream stream(debugLogFile);

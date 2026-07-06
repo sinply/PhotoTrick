@@ -29,7 +29,6 @@ signals:
 
 private slots:
     void onExportMarkdown();
-    void onExportWord();
     void onExportExcel();
     void onExportJson();
 
@@ -53,7 +52,6 @@ private:
 
     // Export buttons
     QPushButton *m_btnExportMarkdown;
-    QPushButton *m_btnExportWord;
     QPushButton *m_btnExportExcel;
     QPushButton *m_btnExportJson;
 };

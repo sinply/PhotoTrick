@@ -49,6 +49,18 @@ private:
     QString m_baseUrl;
     QString m_model;
     OcrInterface *m_currentClient;
+
+    // 多图串行队列：上一张 finished/error 后再发下一张，避免覆盖未完成请求
+    QList<QImage> m_pendingImages;
+    QString m_pendingPrompt;
+    int m_pendingTotal = 0;
+    int m_pendingIndex = 0;
+    bool m_batchActive = false;
+
+private slots:
+    void onBatchFinished(const QJsonObject &result);
+    void onBatchError(const QString &error);
+    void dispatchNextPending();
 };
 
 #endif // OCRMANAGER_H

@@ -38,7 +38,6 @@ void ResultPreview::setupUI()
     // Export dropdown
     QMenu *exportMenu = new QMenu(this);
     exportMenu->addAction(tr("Markdown (.md)"), this, &ResultPreview::onExportMarkdown);
-    exportMenu->addAction(tr("Word (.docx)"), this, &ResultPreview::onExportWord);
     exportMenu->addAction(tr("Excel (.csv)"), this, &ResultPreview::onExportExcel);
     exportMenu->addAction(tr("JSON (.json)"), this, &ResultPreview::onExportJson);
 
@@ -205,11 +204,6 @@ void ResultPreview::clearData()
 void ResultPreview::onExportMarkdown()
 {
     emit exportRequested("markdown");
-}
-
-void ResultPreview::onExportWord()
-{
-    emit exportRequested("word");
 }
 
 void ResultPreview::onExportExcel()

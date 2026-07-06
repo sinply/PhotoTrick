@@ -8,16 +8,22 @@
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
+#include <QDir>
 
-// Helper function to log to file
+// Helper function to log to file (由环境变量 PHOTOTRICK_DEBUG 启用)
 static void logToFile(const QString &message)
 {
-    QString logPath = QCoreApplication::applicationDirPath() + "/ocr_server_debug.log";
-    QFile file(logPath);
+    static bool enabled = !qEnvironmentVariableIsEmpty("PHOTOTRICK_DEBUG");
+    if (!enabled) return;
+
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (dir.isEmpty()) dir = QCoreApplication::applicationDirPath();
+    QDir().mkpath(dir);
+    QFile file(dir + QDir::separator() + QStringLiteral("ocr_server_debug.log"));
     if (file.open(QIODevice::Append | QIODevice::Text)) {
         QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
         file.write(QString("[%1] %2\n").arg(timestamp, message).toUtf8());
-        file.close();
     }
 }
 
